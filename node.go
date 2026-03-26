@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -31,6 +32,7 @@ func main() {
 		conn, err := net.Dial("tcp", hubAddr)
 		if err != nil {
 			log.Println("Не удалось подключиться к ХАБу. Повтор через 2 секунды...")
+			time.Sleep(2 * time.Second)
 			continue
 		}
 
