@@ -1,78 +1,81 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"io"
+	"log"
+	"net"
 	"os"
 	"path/filepath"
-
-	"github.com/jlaffaye/ftp"
+	"strconv"
+	"strings"
 )
 
 func main() {
-	// Usage: go run client.go [host:port] [username] [password] <local_path> <remote_path>
 	if len(os.Args) < 6 {
-		fmt.Println("Usage: go run client.go [host:port] [username] [password] <local_path> <remote_path>")
-		os.Exit(1)
+		fmt.Println("Использование: go run client.go <hub_address> <alias> <password> <upload|download> <filepath>")
+		fmt.Println("Пример: go run client.go localhost:8080 mynode 12345 upload test.txt")
+		return
 	}
-	host := os.Args[1]
-	username := os.Args[2]
-	password := os.Args[3]
-	srcPath := os.Args[4]
-	destPath := os.Args[5]
 
-	fmt.Printf("🔌 Connecting to %s as %s...\n", host, username)
-	c, err := ftp.Dial(host)
+	hubAddr, alias, pass, cmd, filePath := os.Args[1], os.Args[2], os.Args[3], strings.ToLower(os.Args[4]), os.Args[5]
+	filename := filepath.Base(filePath)
+
+	conn, err := net.Dial("tcp", hubAddr)
 	if err != nil {
-		fmt.Printf("❌ Connect error: %v\n", err)
-		os.Exit(1)
+		log.Fatal("Ошибка подключения к ХАБу:", err)
 	}
-	defer c.Quit()
+	defer conn.Close()
 
-	if err := c.Login(username, password); err != nil {
-		fmt.Printf("❌ Login error: %v\n", err)
-		os.Exit(1)
+	// Запрашиваем коннект к ноде
+	fmt.Fprintf(conn, "CONNECT %s %s\n", alias, pass)
+
+	reader := bufio.NewReader(conn)
+	status, _ := reader.ReadString('\n')
+	if strings.TrimSpace(status) != "OK" {
+		log.Fatal("Ошибка от ХАБа:", status)
 	}
-	fmt.Println("✅ Logged in")
 
-	_ = c.MakeDir(destPath)
-
-	fmt.Printf("📤 Uploading %s → %s\n", srcPath, destPath)
-	if err := uploadDir(c, srcPath, destPath); err != nil {
-		fmt.Printf("❌ Upload error: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println("✅ Done!")
-}
-
-func uploadDir(c *ftp.ServerConn, localDir, remoteDir string) error {
-	entries, err := os.ReadDir(localDir)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		localPath := filepath.Join(localDir, entry.Name())
-		remotePath := filepath.ToSlash(filepath.Join(remoteDir, entry.Name()))
-		if entry.IsDir() {
-			fmt.Printf("   📂 %s/\n", entry.Name())
-			_ = c.MakeDir(remotePath)
-			if err := uploadDir(c, localPath, remotePath); err != nil {
-				return err
-			}
-		} else {
-			fmt.Printf("   📄 %s\n", entry.Name())
-			if err := uploadFile(c, localPath, remotePath); err != nil {
-				return err
-			}
+	if cmd == "upload" {
+		info, err := os.Stat(filePath)
+		if err != nil {
+			log.Fatal("Файл не найден:", err)
 		}
-	}
-	return nil
-}
 
-func uploadFile(c *ftp.ServerConn, localPath, remotePath string) error {
-	file, err := os.Open(localPath)
-	if err != nil {
-		return err
+		// Инициируем UPLOAD
+		fmt.Fprintf(conn, "UPLOAD %s %d\n", filename, info.Size())
+		
+		resp, _ := reader.ReadString('\n')
+		if strings.TrimSpace(resp) == "READY" {
+			file, _ := os.Open(filePath)
+			io.Copy(conn, file)
+			file.Close()
+			log.Println("Файл успешно загружен на НОДУ.")
+		} else {
+			log.Fatal("НОДА отказала в приеме файла.")
+		}
+
+	} else if cmd == "download" {
+		// Инициируем DOWNLOAD
+		fmt.Fprintf(conn, "DOWNLOAD %s\n", filename)
+		
+		resp, _ := reader.ReadString('\n')
+		parts := strings.Fields(resp)
+		if len(parts) == 2 && parts[0] == "SIZE" {
+			size, _ := strconv.ParseInt(parts[1], 10, 64)
+			
+			file, err := os.Create(filename)
+			if err != nil {
+				log.Fatal("Ошибка создания файла:", err)
+			}
+			io.CopyN(file, reader, size)
+			file.Close()
+			log.Println("Файл успешно скачан.")
+		} else {
+			log.Fatal("Ошибка скачивания: файла нет или НОДА вернула ошибку.")
+		}
+	} else {
+		log.Fatal("Неизвестная команда. Используйте upload или download.")
 	}
-	defer file.Close()
-	return c.Stor(remotePath, file)
 }
