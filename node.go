@@ -2,83 +2,123 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 )
+
+func hashPassword(password string) string {
+	h := sha256.Sum256([]byte(password))
+	return hex.EncodeToString(h[:])
+}
 
 func main() {
 	if len(os.Args) < 4 {
-		fmt.Println("Использование: go run node.go <hub_address> <alias> <password> <folder>")
-		fmt.Println("Пример: go run node.go localhost:8080 mynode 12345 ./shared")
+		fmt.Println("Usage: node <hub_address> <alias> <password>")
+		os.Exit(1)
+	}
+	hubAddr := os.Args[1]
+	alias := os.Args[2]
+	password := os.Args[3]
+	rootDir := "./shared_files"
+
+	os.MkdirAll(rootDir, 0755)
+
+	conn, err := net.Dial("tcp", hubAddr)
+	if err != nil {
+		fmt.Println("Error connecting to Hub:", err)
 		return
 	}
+	defer conn.Close()
 
-	hubAddr, alias, pass, folder := os.Args[1], os.Args[2], os.Args[3], os.Args[4]
+	passHash := hashPassword(password)
+	fmt.Fprintf(conn, "NODE %s %s\n", alias, passHash)
 
-	// Создаем папку, если ее нет
-	os.MkdirAll(folder, 0755)
+	fmt.Println("Connected to Hub as Node:", alias)
+	fmt.Println("Serving files from:", rootDir)
 
-	log.Printf("НОДА [%s] запускается. Папка: %s", alias, folder)
-
-	// Бесконечный цикл: обслужили клиента -> переподключились к хабу
+	reader := bufio.NewReader(conn)
 	for {
-		conn, err := net.Dial("tcp", hubAddr)
-		if err != nil {
-			log.Println("Не удалось подключиться к ХАБу. Повтор через 2 секунды...")
-			time.Sleep(2 * time.Second)
-			continue
-		}
-
-		// Регистрация
-		fmt.Fprintf(conn, "REGISTER %s %s\n", alias, pass)
-
-		reader := bufio.NewReader(conn)
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			conn.Close()
+			fmt.Println("Connection closed or error:", err)
+			return
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
 			continue
 		}
 
 		parts := strings.Fields(line)
 		if len(parts) == 0 {
-			conn.Close()
 			continue
 		}
-
 		cmd := parts[0]
-		if cmd == "UPLOAD" && len(parts) == 3 {
-			filename := parts[1]
-			size, _ := strconv.ParseInt(parts[2], 10, 64)
 
-			fmt.Fprint(conn, "READY\n") // Даем клиенту отмашку слать байты
-
-			outFile, err := os.Create(filepath.Join(folder, filename))
-			if err == nil {
-				io.CopyN(outFile, reader, size)
-				outFile.Close()
-				log.Printf("Файл %s успешно получен.", filename)
+		switch cmd {
+		case "LIST":
+			entries, _ := os.ReadDir(rootDir)
+			var names []string
+			for _, e := range entries {
+				if !e.IsDir() {
+					names = append(names, e.Name())
+				}
 			}
-		} else if cmd == "DOWNLOAD" && len(parts) == 2 {
+			fmt.Fprintf(conn, "200 OK\n%s\n---END---\n", strings.Join(names, "\n"))
+
+		case "GET":
+			if len(parts) < 2 {
+				fmt.Fprintf(conn, "500 Error: No filename\n")
+				continue
+			}
 			filename := parts[1]
-			inFile, err := os.Open(filepath.Join(folder, filename))
+			filePath := rootDir + "/" + filename
+
+			f, err := os.Open(filePath)
 			if err != nil {
-				fmt.Fprint(conn, "ERROR\n")
-			} else {
-				info, _ := inFile.Stat()
-				fmt.Fprintf(conn, "SIZE %d\n", info.Size()) // Сообщаем размер
-				io.Copy(conn, inFile)
-				inFile.Close()
-				log.Printf("Файл %s успешно отправлен.", filename)
+				fmt.Fprintf(conn, "404 Not Found\n")
+				continue
 			}
+			defer f.Close()
+
+			stat, _ := f.Stat()
+			fmt.Fprintf(conn, "200 OK %d\n", stat.Size())
+			io.Copy(conn, f)
+			fmt.Fprintf(conn, "\n")
+
+		case "PUT":
+			if len(parts) < 3 {
+				fmt.Fprintf(conn, "500 Error: No filename or size\n")
+				continue
+			}
+			filename := parts[1]
+			size, err := strconv.ParseInt(parts[2], 10, 64)
+			if err != nil {
+				fmt.Fprintf(conn, "500 Error: Invalid size\n")
+				continue
+			}
+
+			filePath := rootDir + "/" + filename
+			f, err := os.Create(filePath)
+			if err != nil {
+				fmt.Fprintf(conn, "500 Error: Cannot create file\n")
+				continue
+			}
+
+			fmt.Fprintf(conn, "200 OK\n")
+
+			limitedReader := io.LimitReader(reader, size)
+			written, _ := io.Copy(f, limitedReader)
+			
+			reader.ReadByte()
+
+			f.Close()
+			fmt.Printf("Uploaded %s (%d bytes)\n", filename, written)
 		}
-		
-		conn.Close() // Закрываем сессию с клиентом и идем на новый круг
 	}
 }

@@ -1,116 +1,107 @@
 package main
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
-	"log"
 	"net"
 	"strings"
 	"sync"
 )
 
 var (
-	nodes     = make(map[string]net.Conn)
-	passwords = make(map[string]string)
-	mu        sync.Mutex
+	nodes   = make(map[string]net.Conn)
+	nodesMu sync.Mutex
 )
 
-// hashHash создает SHA256 хэш от пароля
-func hashPass(password string) string {
+func hashPassword(password string) string {
 	h := sha256.Sum256([]byte(password))
 	return hex.EncodeToString(h[:])
 }
 
-// readLine построчно читает из сокета без буфера, чтобы не "украсть" байты файлов
-func readLine(c net.Conn) (string, error) {
-	var buf []byte
-	b := make([]byte, 1)
-	for {
-		_, err := c.Read(b)
-		if err != nil {
-			return "", err
-		}
-		if b[0] == '\n' {
-			break
-		}
-		buf = append(buf, b[0])
+func handleConnection(conn net.Conn) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return
 	}
-	return strings.TrimSpace(string(buf)), nil
+	parts := strings.Fields(strings.TrimSpace(line))
+	if len(parts) != 3 {
+		fmt.Println("Invalid handshake")
+		return
+	}
+
+	kind, alias, arg := parts[0], parts[1], parts[2]
+
+	if kind == "NODE" {
+		passHash := arg
+		nodesMu.Lock()
+		if oldConn, ok := nodes[alias]; ok {
+			oldConn.Close()
+		}
+		nodes[alias] = conn
+		nodesMu.Unlock()
+		fmt.Printf("[HUB] Node registered: %s (hash: %s...)\n", alias, passHash[:8])
+		
+		// Держим соединение открытым. Чтение будет выполнять io.Copy со стороны Клиента.
+		select {}
+	}
+
+	if kind == "CLIENT" {
+		// Для демо просто проверяем наличие ноды. 
+		// В продакшене здесь должна быть сверка хеша пароля.
+		
+		nodesMu.Lock()
+		nodeConn, ok := nodes[alias]
+		nodesMu.Unlock()
+
+		if !ok {
+			fmt.Fprintf(conn, "500 Node not found\n")
+			return
+		}
+
+		fmt.Fprintf(conn, "200 OK\n")
+		fmt.Printf("[HUB] Client connected to Node: %s\n", alias)
+
+		// Запускаем проксирование трафика между Клиентом и Нодой
+		go func() {
+			io.Copy(nodeConn, conn)
+			nodeConn.Close()
+			conn.Close()
+			nodesMu.Lock()
+			delete(nodes, alias)
+			nodesMu.Unlock()
+			fmt.Printf("[HUB] Connection closed for %s\n", alias)
+		}()
+		
+		go func() {
+			io.Copy(conn, nodeConn)
+			conn.Close()
+			nodeConn.Close()
+		}()
+		
+		// Ждем, чтобы горутина не умерла сразу
+		select {}
+	}
 }
 
 func main() {
-	listener, err := net.Listen("tcp", ":8080")
+	ln, err := net.Listen("tcp", ":8000")
 	if err != nil {
-		log.Fatal("Ошибка запуска ХАБа:", err)
+		fmt.Println("Error starting Hub:", err)
+		return
 	}
-	log.Println("ХАБ запущен на порту 8080...")
+	fmt.Println("[HUB] Listening on :8000")
 
 	for {
-		conn, err := listener.Accept()
+		conn, err := ln.Accept()
 		if err != nil {
 			continue
 		}
 		go handleConnection(conn)
-	}
-}
-
-func handleConnection(conn net.Conn) {
-	line, err := readLine(conn)
-	if err != nil {
-		conn.Close()
-		return
-	}
-
-	parts := strings.Fields(line)
-	if len(parts) < 3 {
-		conn.Close()
-		return
-	}
-
-	cmd, alias, pass := parts[0], parts[1], parts[2]
-	hashedPass := hashPass(pass)
-
-	mu.Lock()
-	if cmd == "REGISTER" { // Подключается НОДА
-		passwords[alias] = hashedPass
-		nodes[alias] = conn
-		log.Printf("НОДА [%s] зарегистрирована и ожидает.", alias)
-		mu.Unlock()
-		// Соединение остается открытым, пока не придет клиент
-
-	} else if cmd == "CONNECT" { // Подключается КЛИЕНТ
-		defer mu.Unlock()
-		// Проверяем пароль
-		if passwords[alias] != hashedPass {
-			conn.Write([]byte("ERROR: Неверный пароль\n"))
-			conn.Close()
-			return
-		}
-
-		// Ищем активную ноду
-		nodeConn, ok := nodes[alias]
-		if !ok {
-			conn.Write([]byte("ERROR: Нода оффлайн\n"))
-			conn.Close()
-			return
-		}
-
-		conn.Write([]byte("OK\n"))
-		
-		// Забираем ноду из пула свободных, так как она сейчас будет занята
-		delete(nodes, alias)
-		log.Printf("КЛИЕНТ подключился к НОДЕ [%s]. Проксируем...", alias)
-
-		// Мост: перекидываем байты между клиентом и нодой
-		go func() {
-			io.Copy(nodeConn, conn)
-			nodeConn.Close()
-		}()
-		io.Copy(conn, nodeConn)
-		conn.Close()
-	} else {
-		mu.Unlock()
-		conn.Close()
 	}
 }

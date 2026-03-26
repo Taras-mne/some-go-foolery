@@ -2,80 +2,174 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/xml"
 	"fmt"
 	"io"
-	"log"
 	"net"
+	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
 
-func main() {
-	if len(os.Args) < 6 {
-		fmt.Println("Использование: go run client.go <hub_address> <alias> <password> <upload|download> <filepath>")
-		fmt.Println("Пример: go run client.go localhost:8080 mynode 12345 upload test.txt")
-		return
-	}
+func hashPassword(password string) string {
+	h := sha256.Sum256([]byte(password))
+	return hex.EncodeToString(h[:])
+}
 
-	hubAddr, alias, pass, cmd, filePath := os.Args[1], os.Args[2], os.Args[3], strings.ToLower(os.Args[4]), os.Args[5]
-	filename := filepath.Base(filePath)
+type Multistatus struct {
+	XMLName   xml.Name   `xml:"D:multistatus"`
+	Xmlns     string     `xml:"xmlns:D,attr"`
+	Responses []Response `xml:"D:response"`
+}
+
+type Response struct {
+	Href     string   `xml:"D:href"`
+	Propstat Propstat `xml:"D:propstat"`
+}
+
+type Propstat struct {
+	Prop   Prop   `xml:"D:prop"`
+	Status string `xml:"D:status"`
+}
+
+type Prop struct {
+	DisplayName      string `xml:"D:displayname"`
+	GetContentLength string `xml:"D:getcontentlength"`
+	ResourceType     string `xml:"D:resourcetype"`
+}
+
+func main() {
+	if len(os.Args) < 4 {
+		fmt.Println("Usage: client <hub_address> <alias> <password>")
+		os.Exit(1)
+	}
+	hubAddr := os.Args[1]
+	alias := os.Args[2]
+	password := os.Args[3]
 
 	conn, err := net.Dial("tcp", hubAddr)
 	if err != nil {
-		log.Fatal("Ошибка подключения к ХАБу:", err)
+		fmt.Println("Error connecting to Hub:", err)
+		return
 	}
 	defer conn.Close()
 
-	// Запрашиваем коннект к ноде
-	fmt.Fprintf(conn, "CONNECT %s %s\n", alias, pass)
+	passHash := hashPassword(password)
+	fmt.Fprintf(conn, "CLIENT %s %s\n", alias, passHash)
 
 	reader := bufio.NewReader(conn)
-	status, _ := reader.ReadString('\n')
-	if strings.TrimSpace(status) != "OK" {
-		log.Fatal("Ошибка от ХАБа:", status)
+	line, err := reader.ReadString('\n')
+	if err != nil || !strings.Contains(line, "200 OK") {
+		fmt.Println("Auth failed or Hub error:", line)
+		return
+	}
+	fmt.Println("Authenticated. Tunnel established.")
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		handleWebDAV(w, r, conn, reader)
+	})
+
+	fmt.Println("WebDAV Server started at http://localhost:8080")
+	fmt.Println("Map this address as a Network Drive in your File Manager.")
+	http.ListenAndServe(":8080", nil)
+}
+
+func handleWebDAV(w http.ResponseWriter, r *http.Request, conn net.Conn, reader *bufio.Reader) {
+	path := r.URL.Path
+	if path == "" {
+		path = "/"
 	}
 
-	if cmd == "upload" {
-		info, err := os.Stat(filePath)
-		if err != nil {
-			log.Fatal("Файл не найден:", err)
+	reqPath := strings.TrimPrefix(path, "/")
+	if reqPath == "" {
+		reqPath = "."
+	}
+
+	switch r.Method {
+	case "OPTIONS":
+		w.Header().Set("DAV", "1")
+		w.Header().Set("Allow", "OPTIONS, GET, HEAD, POST, COPY, MOVE, PUT, DELETE, PROPFIND, MKCOL")
+		w.WriteHeader(http.StatusOK)
+
+	case "PROPFIND":
+		fmt.Fprintf(conn, "LIST\n")
+
+		status, _ := reader.ReadString('\n')
+		if !strings.Contains(status, "200 OK") {
+			http.Error(w, "Node Error", http.StatusInternalServerError)
+			return
 		}
 
-		// Инициируем UPLOAD
-		fmt.Fprintf(conn, "UPLOAD %s %d\n", filename, info.Size())
-		
-		resp, _ := reader.ReadString('\n')
-		if strings.TrimSpace(resp) == "READY" {
-			file, _ := os.Open(filePath)
-			io.Copy(conn, file)
-			file.Close()
-			log.Println("Файл успешно загружен на НОДУ.")
-		} else {
-			log.Fatal("НОДА отказала в приеме файла.")
-		}
-
-	} else if cmd == "download" {
-		// Инициируем DOWNLOAD
-		fmt.Fprintf(conn, "DOWNLOAD %s\n", filename)
-		
-		resp, _ := reader.ReadString('\n')
-		parts := strings.Fields(resp)
-		if len(parts) == 2 && parts[0] == "SIZE" {
-			size, _ := strconv.ParseInt(parts[1], 10, 64)
-			
-			file, err := os.Create(filename)
+		var files []string
+		for {
+			l, err := reader.ReadString('\n')
 			if err != nil {
-				log.Fatal("Ошибка создания файла:", err)
+				break
 			}
-			io.CopyN(file, reader, size)
-			file.Close()
-			log.Println("Файл успешно скачан.")
-		} else {
-			log.Fatal("Ошибка скачивания: файла нет или НОДА вернула ошибку.")
+			l = strings.TrimSpace(l)
+			if l == "---END---" {
+				break
+			}
+			if l != "" {
+				files = append(files, l)
+			}
 		}
-	} else {
-		log.Fatal("Неизвестная команда. Используйте upload или download.")
+
+		ms := Multistatus{Xmlns: "DAV:"}
+		for _, f := range files {
+			ms.Responses = append(ms.Responses, Response{
+				Href: path + "/" + f,
+				Propstat: Propstat{
+					Status: "HTTP/1.1 200 OK",
+					Prop: Prop{
+						DisplayName:      f,
+						GetContentLength: "0",
+						ResourceType:     "",
+					},
+				},
+			})
+		}
+
+		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+		w.WriteHeader(http.StatusMultiStatus)
+		xmlData, _ := xml.MarshalIndent(ms, "", "  ")
+		w.Write(xmlData)
+
+	case "GET":
+		fmt.Fprintf(conn, "GET %s\n", reqPath)
+		status, _ := reader.ReadString('\n')
+		if !strings.Contains(status, "200 OK") {
+			http.Error(w, "File not found", http.StatusNotFound)
+			return
+		}
+
+		parts := strings.Fields(status)
+		if len(parts) < 3 {
+			http.Error(w, "Invalid response from node", http.StatusInternalServerError)
+			return
+		}
+		size, _ := strconv.ParseInt(parts[2], 10, 64)
+
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+		io.CopyN(w, reader, size)
+		reader.ReadByte()
+
+	case "PUT":
+		size := r.ContentLength
+		fmt.Fprintf(conn, "PUT %s %d\n", reqPath, size)
+
+		ack, _ := reader.ReadString('\n')
+		if !strings.Contains(ack, "200 OK") {
+			http.Error(w, "Upload failed", http.StatusInternalServerError)
+			return
+		}
+
+		io.Copy(conn, r.Body)
+		conn.Write([]byte("\n"))
+
+		w.WriteHeader(http.StatusCreated)
 	}
 }
