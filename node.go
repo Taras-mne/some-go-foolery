@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func hashPassword(password string) string {
@@ -17,22 +18,10 @@ func hashPassword(password string) string {
 	return hex.EncodeToString(h[:])
 }
 
-func main() {
-	if len(os.Args) < 4 {
-		fmt.Println("Usage: node <hub_address> <alias> <password>")
-		os.Exit(1)
-	}
-	hubAddr := os.Args[1]
-	alias := os.Args[2]
-	password := os.Args[3]
-	rootDir := "./shared_files"
-
-	os.MkdirAll(rootDir, 0755)
-
+func serveNode(hubAddr, alias, password, rootDir string) error {
 	conn, err := net.Dial("tcp", hubAddr)
 	if err != nil {
-		fmt.Println("Error connecting to Hub:", err)
-		return
+		return fmt.Errorf("cannot connect to hub: %w", err)
 	}
 	defer conn.Close()
 
@@ -46,8 +35,7 @@ func main() {
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			fmt.Println("Connection closed or error:", err)
-			return
+			return fmt.Errorf("connection lost: %w", err)
 		}
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -84,12 +72,12 @@ func main() {
 				fmt.Fprintf(conn, "404 Not Found\n")
 				continue
 			}
-			defer f.Close()
 
 			stat, _ := f.Stat()
 			fmt.Fprintf(conn, "200 OK %d\n", stat.Size())
 			io.Copy(conn, f)
 			fmt.Fprintf(conn, "\n")
+			f.Close()
 
 		case "PUT":
 			if len(parts) < 3 {
@@ -114,11 +102,32 @@ func main() {
 
 			limitedReader := io.LimitReader(reader, size)
 			written, _ := io.Copy(f, limitedReader)
-			
-			reader.ReadByte()
+
+			reader.ReadByte() // consume trailing newline
 
 			f.Close()
 			fmt.Printf("Uploaded %s (%d bytes)\n", filename, written)
+		}
+	}
+}
+
+func main() {
+	if len(os.Args) < 4 {
+		fmt.Println("Usage: node <hub_address> <alias> <password>")
+		os.Exit(1)
+	}
+	hubAddr := os.Args[1]
+	alias := os.Args[2]
+	password := os.Args[3]
+	rootDir := "./shared_files"
+
+	os.MkdirAll(rootDir, 0755)
+
+	for {
+		err := serveNode(hubAddr, alias, password, rootDir)
+		if err != nil {
+			fmt.Printf("[NODE] %v — reconnecting in 5s...\n", err)
+			time.Sleep(5 * time.Second)
 		}
 	}
 }

@@ -69,7 +69,7 @@ func handleConnection(conn net.Conn) {
 
 		// Запускаем проксирование трафика между Клиентом и Нодой
 		go func() {
-			io.Copy(nodeConn, conn)
+			io.Copy(nodeConn, reader) // читаем из reader, не conn — bufio мог буферизировать данные
 			nodeConn.Close()
 			conn.Close()
 			nodesMu.Lock()
