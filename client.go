@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 func hashPassword(password string) string {
@@ -36,10 +37,16 @@ type Propstat struct {
 }
 
 type Prop struct {
-	DisplayName      string `xml:"D:displayname"`
-	GetContentLength string `xml:"D:getcontentlength"`
-	ResourceType     string `xml:"D:resourcetype"`
+	DisplayName      string       `xml:"D:displayname"`
+	GetContentLength string       `xml:"D:getcontentlength,omitempty"`
+	ResourceType     *Collection  `xml:"D:resourcetype"`
 }
+
+type Collection struct {
+	Collection *struct{} `xml:"D:collection"`
+}
+
+var mu sync.Mutex
 
 func main() {
 	if len(os.Args) < 4 {
@@ -91,10 +98,13 @@ func handleWebDAV(w http.ResponseWriter, r *http.Request, conn net.Conn, reader 
 	switch r.Method {
 	case "OPTIONS":
 		w.Header().Set("DAV", "1")
-		w.Header().Set("Allow", "OPTIONS, GET, HEAD, POST, COPY, MOVE, PUT, DELETE, PROPFIND, MKCOL")
+		w.Header().Set("Allow", "OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, MKCOL")
 		w.WriteHeader(http.StatusOK)
 
 	case "PROPFIND":
+		mu.Lock()
+		defer mu.Unlock()
+
 		fmt.Fprintf(conn, "LIST\n")
 
 		status, _ := reader.ReadString('\n')
@@ -119,15 +129,33 @@ func handleWebDAV(w http.ResponseWriter, r *http.Request, conn net.Conn, reader 
 		}
 
 		ms := Multistatus{Xmlns: "DAV:"}
+
+		// Root collection entry — required for Windows/macOS to mount the drive
+		ms.Responses = append(ms.Responses, Response{
+			Href: path,
+			Propstat: Propstat{
+				Status: "HTTP/1.1 200 OK",
+				Prop: Prop{
+					DisplayName:  "",
+					ResourceType: &Collection{Collection: &struct{}{}},
+				},
+			},
+		})
+
 		for _, f := range files {
+			href := path
+			if !strings.HasSuffix(href, "/") {
+				href += "/"
+			}
+			href += f
 			ms.Responses = append(ms.Responses, Response{
-				Href: path + "/" + f,
+				Href: href,
 				Propstat: Propstat{
 					Status: "HTTP/1.1 200 OK",
 					Prop: Prop{
 						DisplayName:      f,
 						GetContentLength: "0",
-						ResourceType:     "",
+						ResourceType:     &Collection{},
 					},
 				},
 			})
@@ -139,6 +167,9 @@ func handleWebDAV(w http.ResponseWriter, r *http.Request, conn net.Conn, reader 
 		w.Write(xmlData)
 
 	case "GET":
+		mu.Lock()
+		defer mu.Unlock()
+
 		fmt.Fprintf(conn, "GET %s\n", reqPath)
 		status, _ := reader.ReadString('\n')
 		if !strings.Contains(status, "200 OK") {
@@ -146,7 +177,7 @@ func handleWebDAV(w http.ResponseWriter, r *http.Request, conn net.Conn, reader 
 			return
 		}
 
-		parts := strings.Fields(status)
+		parts := strings.Fields(strings.TrimSpace(status))
 		if len(parts) < 3 {
 			http.Error(w, "Invalid response from node", http.StatusInternalServerError)
 			return
@@ -155,9 +186,12 @@ func handleWebDAV(w http.ResponseWriter, r *http.Request, conn net.Conn, reader 
 
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 		io.CopyN(w, reader, size)
-		reader.ReadByte()
+		reader.ReadByte() // consume trailing newline
 
 	case "PUT":
+		mu.Lock()
+		defer mu.Unlock()
+
 		size := r.ContentLength
 		fmt.Fprintf(conn, "PUT %s %d\n", reqPath, size)
 
