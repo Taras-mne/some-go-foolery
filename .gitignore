@@ -3,11 +3,14 @@
 /daemon-windows-amd64.exe
 /relay
 /relay-linux-amd64
+*.exe
 
 # macOS
 .DS_Store
 
 # Data / secrets
 /data/
+/shared_files/
+/test_shared/
 *.json
 !go.sum
