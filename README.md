@@ -32,11 +32,22 @@ Turn your laptop into a personal cloud. Claudy exposes any local folder as a Web
 
 ## Build
 
+**macOS / Linux**
+
 ```bash
 git clone https://github.com/Taras-mne/some-go-foolery.git
 cd some-go-foolery
 go build -o relay ./cmd/relay/
 go build -o daemon ./cmd/daemon/
+```
+
+**Windows** (PowerShell)
+
+```powershell
+git clone https://github.com/Taras-mne/some-go-foolery.git
+cd some-go-foolery
+go build -o relay.exe ./cmd/relay/
+go build -o daemon.exe ./cmd/daemon/
 ```
 
 ---
