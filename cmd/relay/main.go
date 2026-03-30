@@ -14,6 +14,7 @@ package main
 
 import (
 	"crypto/rand"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,6 +34,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
+
+//go:embed static/drive.html
+var driveHTML []byte
 
 // ---------------------------------------------------------------------------
 // Tunnel registry
@@ -359,6 +363,10 @@ func main() {
 	mux.HandleFunc("/tunnel", handleTunnel)
 	mux.HandleFunc("/dav/", handleDAV)
 	mux.HandleFunc("/health", handleHealth)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(driveHTML)
+	})
 
 	// CORS wrapper for browser-based file manager.
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
