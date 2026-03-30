@@ -366,9 +366,11 @@ func main() {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PROPFIND, MKCOL, MOVE, COPY, OPTIONS, LOCK, UNLOCK, PROPPATCH")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Depth, Destination, Overwrite")
 		w.Header().Set("Access-Control-Expose-Headers", "DAV, Content-Type, Allow")
-		// Only intercept OPTIONS for non-DAV paths (CORS preflight for API endpoints).
-		// DAV OPTIONS must be forwarded to the daemon so Finder sees DAV: 1,2 header.
-		if r.Method == http.MethodOptions && !strings.HasPrefix(r.URL.Path, "/dav/") {
+		// CORS preflight (browser sends Access-Control-Request-Method, no auth).
+		// Must return 204 immediately — never hit auth checks.
+		// Plain WebDAV OPTIONS from Finder/clients (no ACRM header) goes to the handler
+		// so the daemon can reply with DAV: 1,2 and Allow headers.
+		if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
