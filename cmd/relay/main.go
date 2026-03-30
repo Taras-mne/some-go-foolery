@@ -361,7 +361,9 @@ func main() {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PROPFIND, MKCOL, MOVE, COPY, OPTIONS, LOCK, UNLOCK, PROPPATCH")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Depth, Destination, Overwrite")
 		w.Header().Set("Access-Control-Expose-Headers", "DAV, Content-Type, Allow")
-		if r.Method == http.MethodOptions && r.URL.Path != "/tunnel" {
+		// Only intercept OPTIONS for non-DAV paths (CORS preflight for API endpoints).
+		// DAV OPTIONS must be forwarded to the daemon so Finder sees DAV: 1,2 header.
+		if r.Method == http.MethodOptions && !strings.HasPrefix(r.URL.Path, "/dav/") {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
