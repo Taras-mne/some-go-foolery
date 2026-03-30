@@ -289,6 +289,11 @@ func handleDAV(w http.ResponseWriter, r *http.Request) {
 				w.Header().Add(k, v)
 			}
 		}
+		// golang.org/x/net/webdav does not emit DAV: header; add it so
+		// macOS Finder recognises the endpoint as a WebDAV server.
+		if r.Method == http.MethodOptions {
+			w.Header().Set("DAV", "1, 2")
+		}
 		w.WriteHeader(resp.Status)
 		_, _ = w.Write(resp.Body)
 	case <-time.After(60 * time.Second):
