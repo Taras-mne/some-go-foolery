@@ -1,0 +1,13 @@
+# Compiled binaries
+/daemon
+/daemon-windows-amd64.exe
+/relay
+/relay-linux-amd64
+
+# macOS
+.DS_Store
+
+# Data / secrets
+/data/
+*.json
+!go.sum
