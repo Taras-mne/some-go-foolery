@@ -124,6 +124,23 @@ func (s *Store) Login(username, password string) (string, error) {
 	return token.SignedString(s.jwtSecret)
 }
 
+// IssueToken generates a signed JWT for an existing user without verifying the
+// password. Used internally for loopback (localhost) bypass flows.
+func (s *Store) IssueToken(username string) (string, error) {
+	s.mu.RLock()
+	u, ok := s.users[username]
+	s.mu.RUnlock()
+	if !ok {
+		return "", errors.New("user not found")
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": username,
+		"uid": u.ID,
+		"exp": time.Now().Add(30 * 24 * time.Hour).Unix(),
+	})
+	return token.SignedString(s.jwtSecret)
+}
+
 // ValidateToken verifies a JWT and returns the username.
 func (s *Store) ValidateToken(tokenStr string) (string, error) {
 	token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {

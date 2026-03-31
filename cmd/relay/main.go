@@ -117,6 +117,17 @@ func nfcRequestURI(r *http.Request) string {
 	return encoded
 }
 
+func isDAVMethod(m string) bool {
+	switch m {
+	// OPTIONS is handled upstream (CORS wrapper + default 200); exclude it here
+	// so Windows WebClient can discover DAV capabilities without credentials.
+	case "PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK",
+		http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodHead:
+		return true
+	}
+	return false
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -221,6 +232,32 @@ func handleTunnel(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func handleDAV(w http.ResponseWriter, r *http.Request) {
+	// Windows WebClient probes /dav/ (no username) with PROPFIND — return collection listing.
+	trimmed := strings.TrimPrefix(r.URL.Path, "/dav/")
+	if trimmed == "" || trimmed == "/" {
+		if r.Method == "PROPFIND" {
+			registryMu.RLock()
+			var entries string
+			for u := range registry {
+				entries += `<D:response><D:href>/dav/` + u + `/</D:href>` +
+					`<D:propstat><D:prop><D:resourcetype><D:collection/></D:resourcetype>` +
+					`<D:displayname>` + u + `</D:displayname></D:prop>` +
+					`<D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>`
+			}
+			registryMu.RUnlock()
+			w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+			w.WriteHeader(207)
+			w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?>` +
+				`<D:multistatus xmlns:D="DAV:"><D:response><D:href>/dav/</D:href>` +
+				`<D:propstat><D:prop><D:resourcetype><D:collection/></D:resourcetype></D:prop>` +
+				`<D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>` +
+				entries + `</D:multistatus>`))
+			return
+		}
+		http.NotFound(w, r)
+		return
+	}
+
 	// macOS Finder requires Basic Auth — issue a challenge if missing.
 	username, password, ok := r.BasicAuth()
 	if !ok {
@@ -244,7 +281,6 @@ func handleDAV(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Path: /dav/<username>/rest…  — enforce that the authed user matches the path.
-	trimmed := strings.TrimPrefix(r.URL.Path, "/dav/")
 	slash := strings.IndexByte(trimmed, '/')
 	var pathUser string
 	if slash < 0 {
@@ -364,6 +400,79 @@ func main() {
 	mux.HandleFunc("/dav/", handleDAV)
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// All WebDAV methods (including PROPFIND): authenticate and proxy to
+		// /dav/<username>/ so Windows WebClient sees the user's files at the root.
+		// If no credentials are provided, return a stub 207 for PROPFIND so that
+		// Windows WebClient can probe capabilities before sending credentials.
+		// Browser GET on root → serve the web UI.
+		if r.Method == http.MethodGet && r.URL.Path == "/" &&
+			!strings.Contains(r.Header.Get("User-Agent"), "WebDAV") {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write(driveHTML)
+			return
+		}
+
+		if r.Method == "PROPFIND" || isDAVMethod(r.Method) {
+			// Windows WebDAV MiniRedir does not send Basic credentials for localhost
+			// even after a 401 challenge. When the request is from loopback (local machine
+			// only), skip auth and proxy to the first online daemon. This is safe because
+			// only local processes can reach 127.0.0.1 / ::1.
+			// Remote clients (Mac, phone) use /dav/<username>/ with full auth instead.
+			remoteHost := r.RemoteAddr
+			if idx := strings.LastIndex(remoteHost, ":"); idx >= 0 {
+				remoteHost = remoteHost[:idx]
+			}
+			remoteHost = strings.Trim(remoteHost, "[]")
+			isLoopback := remoteHost == "127.0.0.1" || remoteHost == "::1"
+
+			var proxyUsername string
+			if isLoopback {
+				// Pick the first online user.
+				registryMu.RLock()
+				for u := range registry {
+					proxyUsername = u
+					break
+				}
+				registryMu.RUnlock()
+			} else {
+				// Remote client: require auth.
+				username, password, ok := r.BasicAuth()
+				if !ok {
+					w.Header().Set("WWW-Authenticate", `Basic realm="Claudy"`)
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				authed := store.ValidatePassword(username, password)
+				if !authed {
+					if u, err := store.ValidateToken(password); err == nil && u == username {
+						authed = true
+					}
+				}
+				if !authed {
+					w.Header().Set("WWW-Authenticate", `Basic realm="Claudy"`)
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				proxyUsername = username
+			}
+
+			if proxyUsername == "" {
+				http.Error(w, "no daemon online", http.StatusServiceUnavailable)
+				return
+			}
+
+			// Rewrite path: /foo -> /dav/<username>/foo
+			rest := strings.TrimPrefix(r.URL.Path, "/")
+			r2 := r.Clone(r.Context())
+			r2.URL.Path = "/dav/" + proxyUsername + "/" + rest
+			r2.RequestURI = r2.URL.RequestURI()
+			// Inject a JWT so handleDAV passes its auth check without a password.
+			if tok, err := store.IssueToken(proxyUsername); err == nil {
+				r2.SetBasicAuth(proxyUsername, tok)
+			}
+			handleDAV(w, r2)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(driveHTML)
 	})
@@ -378,6 +487,9 @@ func main() {
 		// Must return 204 immediately — never hit auth checks.
 		// Plain WebDAV OPTIONS from Finder/clients (no ACRM header) goes to the handler
 		// so the daemon can reply with DAV: 1,2 and Allow headers.
+		// Always advertise DAV capability so Windows WebClient doesn't bail on error 67.
+		w.Header().Set("DAV", "1, 2")
+		w.Header().Set("MS-Author-Via", "DAV")
 		if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
 			w.WriteHeader(http.StatusNoContent)
 			return
