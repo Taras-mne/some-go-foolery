@@ -19,7 +19,7 @@ Turn your laptop into a personal cloud. Claudy exposes any local folder as a Web
 | Binary | Role |
 |--------|------|
 | `relay` | Public server. Authenticates clients, proxies WebDAV over WebSocket tunnel |
-| `daemon` | Runs on your laptop. Serves local folder as WebDAV, connects to relay |
+| `daemon` | Runs on your laptop. Serves local folder as WebDAV, connects to relay. Includes a system tray icon on macOS, Windows, and Linux |
 
 ---
 
@@ -80,6 +80,12 @@ After=network.target
 ExecStart=/usr/local/bin/relay
 Environment=PORT=80
 Environment=DATA_DIR=/var/lib/claudy
+Environment=BASE_URL=https://your-relay.com
+Environment=SMTP_HOST=smtp.gmail.com
+Environment=SMTP_PORT=587
+Environment=SMTP_USER=noreply@your-domain.com
+Environment=SMTP_PASS=your-app-password
+Environment=SMTP_FROM=Claudy <noreply@your-domain.com>
 Restart=always
 
 [Install]
@@ -96,6 +102,11 @@ sudo systemctl enable --now claudy-relay
 # PowerShell — run relay
 $env:PORT = "8080"
 $env:DATA_DIR = "C:\claudy\data"
+$env:BASE_URL = "https://your-relay.com"
+$env:SMTP_HOST = "smtp.gmail.com"
+$env:SMTP_PORT = "587"
+$env:SMTP_USER = "noreply@your-domain.com"
+$env:SMTP_PASS = "your-app-password"
 .\relay.exe
 ```
 
@@ -113,6 +124,14 @@ nssm start claudy-relay
 |----------|---------|-------------|
 | `PORT` | `8080` | Port to listen on |
 | `DATA_DIR` | `/var/lib/claudy` | Directory for `users.json` and JWT secret |
+| `BASE_URL` | `http://localhost:<PORT>` | Public relay URL — used in verification email links |
+| `SMTP_HOST` | — | SMTP server hostname, e.g. `smtp.gmail.com` |
+| `SMTP_PORT` | `587` | SMTP port (STARTTLS) |
+| `SMTP_USER` | — | SMTP auth username |
+| `SMTP_PASS` | — | SMTP password or app password |
+| `SMTP_FROM` | SMTP_USER | From address, e.g. `Claudy <noreply@example.com>` |
+
+> If SMTP is not configured, the relay logs the verification token to stdout instead of emailing it. Useful for local development.
 
 ---
 
@@ -128,8 +147,12 @@ nssm start claudy-relay
 
 The wizard will ask for:
 1. Relay server URL (e.g. `http://your-server.com`)
-2. Username and password (auto-registers if new)
-3. Folder to share — native macOS folder picker opens
+2. Username and password
+3. Whether to create a new account or log in to an existing one
+   - If creating: email address (a verification link will be sent)
+4. Folder to share — native macOS folder picker opens
+
+A system tray icon appears in the menu bar showing connection status with options to open the web UI, change the shared folder, and quit.
 
 Config is saved to `~/.claudy/config.json` and reused on next start.
 
@@ -178,7 +201,7 @@ launchctl load ~/Library/LaunchAgents/com.claudy.daemon.plist
 ./daemon
 ```
 
-The wizard will ask for relay URL, credentials, and folder. For folder picker it tries `zenity` (GNOME) or `kdialog` (KDE), falls back to text input.
+The wizard will ask for relay URL, credentials, email (for new accounts), and folder. For folder picker it tries `zenity` (GNOME) or `kdialog` (KDE), falls back to text input. A system tray icon is shown if a compatible desktop environment is available.
 
 **Mount the drive:**
 
@@ -247,6 +270,7 @@ $dataDir  = "$env:USERPROFILE\.claudy-data"
 $shareDir = "C:\path\to\folder-to-share"   # <-- change this
 $user     = "admin"
 $pass     = "adminpass"                    # <-- change this
+$email    = "you@example.com"              # <-- change this
 
 New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
 Get-Process -Name relay,daemon -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -257,19 +281,24 @@ Start-Process "$proj\relay.exe" -WorkingDirectory $proj `
     -RedirectStandardError "$proj\relay.log" -WindowStyle Hidden
 Start-Sleep 3
 
+# Register account (only succeeds on first run; safe to run every time)
 try {
-    $body = '{"username":"' + $user + '","password":"' + $pass + '"}'
+    $body = '{"username":"' + $user + '","password":"' + $pass + '","email":"' + $email + '"}'
     Invoke-RestMethod http://localhost:8080/auth/register -Method Post `
         -Body $body -ContentType "application/json" | Out-Null
+    Write-Host "Check $email for a verification link before the daemon can log in."
 } catch {}
 
 $env:CLAUDY_RELAY = "http://localhost:8080"
 $env:CLAUDY_USER  = $user
 $env:CLAUDY_PASS  = $pass
 $env:CLAUDY_DIR   = $shareDir
+$env:CLAUDY_NO_TRAY = "1"   # headless — no tray icon needed when running as a service
 Start-Process "$proj\daemon.exe" -WorkingDirectory $proj `
     -RedirectStandardError "$proj\daemon.log" -WindowStyle Hidden
 ```
+
+> **Note:** On first run, verify your email before starting the daemon. Once verified, subsequent runs of `start.ps1` will skip registration and go straight to login.
 
 **4. Create `map_drive.ps1`** — maps the drive (run after `start.ps1`)
 
@@ -331,6 +360,7 @@ Override config file or skip the wizard entirely:
 | `CLAUDY_USER` | Username |
 | `CLAUDY_PASS` | Password |
 | `CLAUDY_DIR` | Folder to share |
+| `CLAUDY_NO_TRAY` | Set to `1` to disable the system tray icon (headless/service mode) |
 
 Example:
 
@@ -344,14 +374,61 @@ CLAUDY_DIR=/home/alice/files \
 
 ---
 
+## Registration and email verification
+
+When creating a new account, Claudy sends a verification link to the provided email address. The account cannot be used until the link is clicked.
+
+**Flow:**
+
+1. Register → receive verification email
+2. Click the link → account activated
+3. Log in normally
+
+**API:**
+
+```bash
+# 1. Register
+curl -X POST https://your-relay.com/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"alice","password":"secret","email":"alice@example.com"}'
+# → {"status":"ok","message":"check your email to verify your account"}
+
+# 2. Verify (link from email)
+curl https://your-relay.com/auth/verify?token=<token>
+# → {"status":"ok","message":"email verified — you can now log in"}
+
+# 3. Login
+curl -X POST https://your-relay.com/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"alice","password":"secret"}'
+# → {"token":"<jwt>"}
+```
+
+**Development without SMTP:**
+
+If `SMTP_HOST` is not set, the relay prints the verify token to stdout:
+
+```
+[auth] registered: alice <alice@example.com> — verify token: 8a99080ec969962016eb7062a8d94f2c
+```
+
+Verify manually:
+
+```bash
+curl http://localhost:8080/auth/verify?token=8a99080ec969962016eb7062a8d94f2c
+```
+
+---
+
 ## API
 
-| Method | Endpoint | Description |
+| Method | Endpoint | Body / Notes |
 |--------|----------|-------------|
-| `POST` | `/auth/register` | Register `{"username":"...","password":"..."}` |
-| `POST` | `/auth/login` | Login → `{"token":"..."}` |
+| `POST` | `/auth/register` | `{"username":"…","password":"…","email":"…"}` — sends verification email |
+| `POST` | `/auth/login` | `{"username":"…","password":"…"}` → `{"token":"…"}` |
+| `GET` | `/auth/verify?token=<token>` | Activates account from email link |
 | `GET` | `/tunnel?token=<jwt>` | Daemon WebSocket connection |
-| `*` | `/dav/<username>/…` | WebDAV access (Basic Auth) |
+| `*` | `/dav/<username>/…` | WebDAV access (Basic Auth: username + password or JWT) |
 | `GET` | `/health` | `{"status":"ok","tunnels":N}` |
 
 ---
