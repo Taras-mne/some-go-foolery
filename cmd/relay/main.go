@@ -30,6 +30,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/claudy-app/claudy-core/pkg/auth"
+	"github.com/claudy-app/claudy-core/pkg/captcha"
 	"github.com/claudy-app/claudy-core/pkg/email"
 	"github.com/claudy-app/claudy-core/pkg/tunnel"
 	"github.com/google/uuid"
@@ -90,6 +91,7 @@ var (
 	upgrader   = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 	store      *auth.Store
 	emailCfg   email.Config
+	captchaCfg captcha.Config
 )
 
 // ---------------------------------------------------------------------------
@@ -150,14 +152,26 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Email    string `json:"email"`
+		Username     string `json:"username"`
+		Password     string `json:"password"`
+		Email        string `json:"email"`
+		CaptchaToken string `json:"captcha_token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		errJSON(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON")
 		return
 	}
+
+	// Verify CAPTCHA before doing any work.
+	remoteIP := r.RemoteAddr
+	if idx := strings.LastIndex(remoteIP, ":"); idx >= 0 {
+		remoteIP = remoteIP[:idx]
+	}
+	if err := captcha.Verify(captchaCfg, body.CaptchaToken, remoteIP); err != nil {
+		errJSON(w, http.StatusBadRequest, "CAPTCHA_FAILED", err.Error())
+		return
+	}
+
 	token, err := store.Register(body.Username, body.Password, body.Email)
 	if err != nil {
 		errJSON(w, http.StatusConflict, "REGISTER_FAILED", err.Error())
@@ -178,6 +192,13 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{
 		"status":  "ok",
 		"message": "check your email to verify your account",
+	})
+}
+
+func handleConfig(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{
+		"captcha_site_key": captchaCfg.SiteKey,
+		"captcha_provider": string(captchaCfg.Provider),
 	})
 }
 
@@ -454,7 +475,24 @@ func main() {
 		log.Printf("[relay] SMTP not configured — verify tokens will be logged to stdout")
 	}
 
+	// Load CAPTCHA config from environment.
+	captchaProvider := captcha.Provider(os.Getenv("CAPTCHA_PROVIDER"))
+	if captchaProvider == "" {
+		captchaProvider = captcha.ProviderTurnstile
+	}
+	captchaCfg = captcha.Config{
+		Provider:  captchaProvider,
+		SiteKey:   os.Getenv("CAPTCHA_SITE_KEY"),
+		SecretKey: os.Getenv("CAPTCHA_SECRET"),
+	}
+	if captchaCfg.Enabled() {
+		log.Printf("[relay] CAPTCHA enabled: provider=%s", captchaCfg.Provider)
+	} else {
+		log.Printf("[relay] CAPTCHA disabled — set CAPTCHA_SITE_KEY and CAPTCHA_SECRET to enable")
+	}
+
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/config", handleConfig)
 	mux.HandleFunc("/auth/register", handleRegister)
 	mux.HandleFunc("/auth/login", handleLogin)
 	mux.HandleFunc("/auth/verify", handleVerify)
