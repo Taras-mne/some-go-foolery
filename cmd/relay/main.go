@@ -30,6 +30,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/claudy-app/claudy-core/pkg/auth"
+	"github.com/claudy-app/claudy-core/pkg/email"
 	"github.com/claudy-app/claudy-core/pkg/tunnel"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -88,6 +89,7 @@ var (
 	registryMu sync.RWMutex
 	upgrader   = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 	store      *auth.Store
+	emailCfg   email.Config
 )
 
 // ---------------------------------------------------------------------------
@@ -150,17 +152,55 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
+		Email    string `json:"email"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		errJSON(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON")
 		return
 	}
-	if err := store.Register(body.Username, body.Password); err != nil {
+	token, err := store.Register(body.Username, body.Password, body.Email)
+	if err != nil {
 		errJSON(w, http.StatusConflict, "REGISTER_FAILED", err.Error())
 		return
 	}
-	log.Printf("[auth] registered: %s", body.Username)
-	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
+	log.Printf("[auth] registered: %s <%s> — verify token: %s", body.Username, body.Email, token)
+
+	if emailCfg.Enabled() {
+		if err := email.SendVerification(emailCfg, body.Email, token); err != nil {
+			log.Printf("[auth] WARNING: failed to send verification email to %s: %v", body.Email, err)
+		} else {
+			log.Printf("[auth] verification email sent to %s", body.Email)
+		}
+	} else {
+		log.Printf("[auth] SMTP not configured — verification token printed above")
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"status":  "ok",
+		"message": "check your email to verify your account",
+	})
+}
+
+func handleVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.NotFound(w, r)
+		return
+	}
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		errJSON(w, http.StatusBadRequest, "BAD_REQUEST", "missing token")
+		return
+	}
+	username, err := store.VerifyEmail(token)
+	if err != nil {
+		errJSON(w, http.StatusBadRequest, "VERIFY_FAILED", err.Error())
+		return
+	}
+	log.Printf("[auth] email verified: %s", username)
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":  "ok",
+		"message": "email verified — you can now log in",
+	})
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -393,9 +433,31 @@ func main() {
 	}
 	log.Printf("[relay] data dir: %s", dataDir)
 
+	// Load email config from environment.
+	emailCfg = email.Config{
+		Host:    os.Getenv("SMTP_HOST"),
+		Port:    os.Getenv("SMTP_PORT"),
+		User:    os.Getenv("SMTP_USER"),
+		Pass:    os.Getenv("SMTP_PASS"),
+		From:    os.Getenv("SMTP_FROM"),
+		BaseURL: os.Getenv("BASE_URL"),
+	}
+	if emailCfg.Port == "" {
+		emailCfg.Port = "587"
+	}
+	if emailCfg.BaseURL == "" {
+		emailCfg.BaseURL = "http://localhost:" + port
+	}
+	if emailCfg.Enabled() {
+		log.Printf("[relay] SMTP configured: %s:%s user=%s", emailCfg.Host, emailCfg.Port, emailCfg.User)
+	} else {
+		log.Printf("[relay] SMTP not configured — verify tokens will be logged to stdout")
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/auth/register", handleRegister)
 	mux.HandleFunc("/auth/login", handleLogin)
+	mux.HandleFunc("/auth/verify", handleVerify)
 	mux.HandleFunc("/tunnel", handleTunnel)
 	mux.HandleFunc("/dav/", handleDAV)
 	mux.HandleFunc("/health", handleHealth)

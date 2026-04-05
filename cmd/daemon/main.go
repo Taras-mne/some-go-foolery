@@ -184,10 +184,10 @@ func setupWizard() *Config {
 	choice := readLine("Choice", "1")
 
 	if choice == "2" {
+		email := readLine("Email", "")
 		fmt.Println("Registering...")
-		if err := apiRegister(cfg.RelayURL, cfg.Username, cfg.Password); err != nil {
+		if err := apiRegister(cfg.RelayURL, cfg.Username, cfg.Password, email); err != nil {
 			fmt.Printf("  Registration failed: %s\n", err.Error())
-			// If already taken, fall back to login.
 			if strings.Contains(err.Error(), "already taken") {
 				fmt.Println("  Username already taken — logging in with existing account.")
 			} else {
@@ -195,7 +195,7 @@ func setupWizard() *Config {
 				return setupWizard()
 			}
 		} else {
-			fmt.Printf("  Account created for %s.\n", cfg.Username)
+			fmt.Printf("  Account created for %s. Check your email to verify before logging in.\n", cfg.Username)
 		}
 	}
 
@@ -230,8 +230,8 @@ func setupWizard() *Config {
 // REST helpers
 // ---------------------------------------------------------------------------
 
-func apiRegister(relayURL, username, password string) error {
-	body, _ := json.Marshal(map[string]string{"username": username, "password": password})
+func apiRegister(relayURL, username, password, email string) error {
+	body, _ := json.Marshal(map[string]string{"username": username, "password": password, "email": email})
 	resp, err := http.Post(relayURL+"/auth/register", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return err
