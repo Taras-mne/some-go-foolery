@@ -1,0 +1,13 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "Claudy",
+  "outputfilename": "Claudy",
+  "frontend:install": "echo ok",
+  "frontend:build": "cp index.html dist/index.html",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "",
+  "author": {
+    "name": "Claudy",
+    "email": ""
+  }
+}

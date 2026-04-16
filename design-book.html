@@ -1,0 +1,1560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claudy — Design Book</title>
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=Geist:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f0f0f;
+      --bg2: #161616;
+      --bg3: #1a1a1a;
+      --border: rgba(255,255,255,0.08);
+      --border-hover: rgba(255,255,255,0.15);
+      --text: #e8e8e8;
+      --text-muted: #6e6e6e;
+      --text-dim: #5a5a5a;
+      --radius: 2px;
+      --red: #e8474a;
+      --red-dark: #c03a3a;
+      --red-glow: rgba(232,71,74,0.12);
+      --red-glow2: rgba(232,71,74,0.06);
+      --white: #ffffff;
+    }
+
+    html { background: var(--bg); color: var(--text); font-family: 'Geist', sans-serif; }
+
+    body {
+      min-height: 100vh;
+      background: var(--bg);
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 60px 40px;
+      margin-left: 220px;
+    }
+
+    /* SIDEBAR */
+    .sidebar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 220px;
+      height: 100vh;
+      overflow-y: auto;
+      padding: 32px 20px;
+      border-right: 1px solid var(--border);
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      z-index: 100;
+    }
+
+    .sidebar-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 28px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .sidebar-logo-mark {
+      width: 26px;
+      height: 26px;
+      background: var(--red);
+      border-radius: var(--radius);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .sidebar-wordmark {
+      font-family: 'Geist Mono', monospace;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      color: var(--text);
+    }
+
+    .sidebar-nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 10px;
+      border-radius: var(--radius);
+      text-decoration: none;
+      font-family: 'Geist Mono', monospace;
+      font-size: 11px;
+      font-weight: 400;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      transition: color 0.15s, background 0.15s;
+    }
+
+    .sidebar-nav-item:hover {
+      color: var(--text);
+      background: var(--bg2);
+    }
+
+    .sidebar-nav-item .nav-num {
+      color: var(--red);
+      font-size: 10px;
+      min-width: 18px;
+      font-weight: 500;
+    }
+
+    @media (max-width: 900px) {
+      .sidebar { display: none; }
+      .container { margin-left: 0; padding: 40px 20px; }
+    }
+
+    /* HEADER */
+    header {
+      text-align: center;
+      margin-bottom: 80px;
+    }
+
+    .logo-mark {
+      width: 88px;
+      height: 88px;
+      background: var(--red);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px;
+      border-radius: var(--radius);
+    }
+
+    .logo-mark svg {
+      width: 72px;
+      height: 64px;
+    }
+
+    .logo-wordmark {
+      font-family: 'Geist Mono', monospace;
+      font-size: 14px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      text-transform: lowercase;
+    }
+
+    .doc-title {
+      font-family: 'Geist Mono', monospace;
+      font-size: 13px;
+      font-weight: 400;
+      letter-spacing: 0.06em;
+      color: var(--text-dim);
+      margin-top: 12px;
+      text-transform: uppercase;
+    }
+
+    /* SECTIONS */
+    section {
+      margin-bottom: 80px;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: baseline;
+      gap: 16px;
+      margin-bottom: 32px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .section-num {
+      font-family: 'Geist Mono', monospace;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--red);
+      letter-spacing: 0.06em;
+    }
+
+    h2 {
+      font-family: 'Geist Mono', monospace;
+      font-size: 16px;
+      font-weight: 500;
+      color: var(--text);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .section-intro {
+      font-size: 14px;
+      color: var(--text-muted);
+      max-width: 700px;
+      line-height: 1.7;
+      margin-bottom: 32px;
+    }
+
+    /* GRIDS */
+    .grid {
+      display: grid;
+      gap: 20px;
+    }
+
+    .grid-2 { grid-template-columns: repeat(2, 1fr); }
+    .grid-3 { grid-template-columns: repeat(3, 1fr); }
+    .grid-4 { grid-template-columns: repeat(4, 1fr); }
+    .grid-5 { grid-template-columns: repeat(5, 1fr); }
+
+    @media (max-width: 900px) {
+      .grid-3, .grid-4, .grid-5 { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 600px) {
+      .grid-2, .grid-3, .grid-4, .grid-5 { grid-template-columns: 1fr; }
+    }
+
+    /* COLOR CARDS */
+    .color-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .color-swatch {
+      height: 100px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Geist Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.04em;
+    }
+
+    .color-swatch.light { color: var(--bg); }
+    .color-swatch.dark { color: var(--text); }
+
+    .color-info {
+      padding: 14px;
+    }
+
+    .color-name {
+      font-family: 'Geist Mono', monospace;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      color: var(--text);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+    }
+
+    .color-value {
+      font-family: 'Geist Mono', monospace;
+      font-size: 10px;
+      color: var(--text-muted);
+      letter-spacing: 0.04em;
+    }
+
+    .color-usage {
+      font-family: 'Geist Mono', monospace;
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 8px;
+      letter-spacing: 0.04em;
+    }
+
+    /* TYPE SAMPLES */
+    .type-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+    }
+
+    .type-label {
+      font-family: 'Geist Mono', monospace;
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+
+    .type-sample-mono {
+      font-family: 'Geist Mono', monospace;
+      font-size: 32px;
+      font-weight: 500;
+      color: var(--text);
+      letter-spacing: 0.04em;
+      line-height: 1.3;
+    }
+
+    .type-sample-mono-small {
+      font-family: 'Geist Mono', monospace;
+      font-size: 18px;
+      font-weight: 400;
+      color: var(--text);
+      letter-spacing: 0.04em;
+    }
+
+    .type-sample-body {
+      font-family: 'Geist', sans-serif;
+      font-size: 15px;
+      font-weight: 400;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    .type-specs {
+      display: flex;
+      gap: 24px;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    .spec {
+      font-family: 'Geist Mono', monospace;
+      font-size: 11px;
+      color: var(--text-dim);
+      letter-spacing: 0.04em;
+    }
+
+    .spec strong {
+      color: var(--text-muted);
+    }
+
+    /* COMPONENT CARDS */
+    .component-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+
+    .component-preview {
+      padding: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      border-bottom: 1px solid var(--border);
+      min-height: 140px;
+    }
+
+    .component-info {
+      padding: 16px;
+    }
+
+    .component-name {
+      font-family: 'Geist Mono', monospace;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      color: var(--text);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+    }
+
+    .component-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    /* BUTTONS */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 20px;
+      border-radius: var(--radius);
+      font-family: 'Geist Mono', monospace;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      transition: all 0.15s;
+      text-decoration: none;
+      border: 1px solid transparent;
+      text-transform: uppercase;
+    }
+
+    .btn-primary {
+      background: var(--red);
+      color: var(--white);
+    }
+
+    .btn-primary:hover {
+      background: var(--red-dark);
+    }
+
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--border-hover);
+      background: var(--bg3);
+    }
+
+    .btn-ghost {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+    }
+
+    .btn-ghost:hover {
+      border-color: var(--text-dim);
+      color: var(--text);
+    }
+
+    /* BADGES */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: var(--radius);
+      font-family: 'Geist Mono', monospace;
+      font-size: 9px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .badge-red {
+      background: var(--red-glow2);
+      border: 1px solid rgba(232,71,74,0.2);
+      color: var(--red);
+    }
+
+    .badge-muted {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+    }
+
+    /* INPUTS */
+    .input-demo {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 11px 14px;
+      font-family: 'Geist Mono', monospace;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      color: var(--text);
+      width: 100%;
+      max-width: 280px;
+      transition: border-color 0.15s;
+    }
+
+    .input-demo:focus {
+      outline: none;
+      border-color: var(--red);
+    }
+
+    .input-demo::placeholder {
+      color: var(--text-dim);
+    }
+
+    /* CARDS */
+    .demo-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      width: 100%;
+      max-width: 340px;
+    }
+
+    .demo-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .demo-card-title {
+      font-family: 'Geist Mono', monospace;
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+      text-transform: uppercase;
+    }
+
+    .demo-card-body {
+      font-size: 13px;
+      color: var(--text-muted);
+      font-family: 'Geist Mono', monospace;
+      letter-spacing: 0.04em;
+    }
+
+    /* STATUS DOTS */
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .status-dot.active {
+      background: var(--red);
+      box-shadow: 0 0 8px var(--red);
+    }
+
+    .status-dot.inactive {
+      background: var(--text-dim);
+    }
+
+    /* SPACING ITEMS */
+    .spacing-item {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      text-align: center;
+    }
+
+    .spacing-bar {
+      height: 8px;
+      background: var(--red-glow);
+      border: 1px solid var(--red);
+      border-radius: 1px;
+      margin: 12px auto 8px;
+    }
+
+    .spacing-value {
+      font-family: 'Geist Mono', monospace;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--red);
+      letter-spacing: 0.04em;
+    }
+
+    .spacing-label {
+      font-family: 'Geist Mono', monospace;
+      font-size: 11px;
+      color: var(--text-dim);
+      letter-spacing: 0.06em;
+      margin-top: 4px;
+    }
+
+    /* ANIMATION CARDS */
+    .anim-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      text-align: center;
+    }
+
+    .anim-box {
+      width: 36px;
+      height: 36px;
+      background: var(--red);
+      margin: 0 auto 16px;
+      border-radius: var(--radius);
+    }
+
+    .anim-name {
+      font-family: 'Geist Mono', monospace;
+      font-size: 10px;
+      font-weight: 500;
+      color: var(--text);
+      letter-spacing: 0.06em;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+    }
+
+    .anim-timing {
+      font-family: 'Geist Mono', monospace;
+      font-size: 11px;
+      color: var(--text-dim);
+      letter-spacing: 0.04em;
+    }
+
+    /* ANIMATIONS */
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes pulseRed {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(0.95); }
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .anim-fade { animation: fadeIn 0.4s ease; }
+    .anim-slide { animation: slideUp 0.4s ease; }
+    .anim-pulse { animation: pulseRed 2s ease-in-out infinite; }
+    .anim-blink { animation: blink 1.5s step-end infinite; }
+
+    /* TABLE */
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: 'Geist Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.04em;
+    }
+
+    .data-table th,
+    .data-table td {
+      padding: 12px 14px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .data-table th {
+      font-weight: 500;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      background: var(--bg2);
+    }
+
+    .data-table td {
+      color: var(--text);
+    }
+
+    .data-table code {
+      font-family: 'Geist Mono', monospace;
+      font-size: 10px;
+      color: var(--red);
+      background: var(--bg3);
+      padding: 2px 6px;
+      border-radius: var(--radius);
+    }
+
+    /* LOGO VARIATIONS */
+    .logo-variant {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 40px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      min-height: 200px;
+    }
+
+    .logo-variant.light {
+      background: #f5f5f5;
+    }
+
+    .logo-variant.light .logo-text {
+      color: #0f0f0f;
+    }
+
+    .logo-variant.light .logo-sub {
+      color: #666;
+    }
+
+    .logo-icon-only {
+      width: 88px;
+      height: 88px;
+      background: var(--red);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: var(--radius);
+    }
+
+    .logo-text {
+      font-family: 'Geist Mono', monospace;
+      font-size: 16px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      color: var(--text);
+      text-transform: lowercase;
+    }
+
+    .logo-sub {
+      font-family: 'Geist Mono', monospace;
+      font-size: 10px;
+      color: var(--text-dim);
+      letter-spacing: 0.06em;
+    }
+
+    /* ICON GRID */
+    .icon-grid {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 12px;
+    }
+
+    @media (max-width: 700px) {
+      .icon-grid { grid-template-columns: repeat(4, 1fr); }
+    }
+
+    .icon-item {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      aspect-ratio: 1;
+    }
+
+    .icon-glyph {
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+    }
+
+    .icon-label {
+      font-family: 'Geist', sans-serif;
+      font-size: 11px;
+      color: var(--text-dim);
+      letter-spacing: 0.02em;
+    }
+
+    /* FOOTER */
+    footer {
+      margin-top: 100px;
+      padding-top: 40px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .footer-left {
+      font-family: 'Geist Mono', monospace;
+      font-size: 10px;
+      color: var(--text-dim);
+      letter-spacing: 0.04em;
+    }
+
+    .footer-right {
+      font-family: 'Geist Mono', monospace;
+      font-size: 10px;
+      color: var(--text-dim);
+      letter-spacing: 0.04em;
+    }
+
+    /* RESPONSIVE */
+    @media (max-width: 768px) {
+      .grid-2 { grid-template-columns: 1fr; }
+      footer { flex-direction: column; gap: 16px; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <div class="sidebar-logo-mark">
+      <svg width="18" height="16" viewBox="3 10 34 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="10" y="22" width="20" height="10" fill="white"/>
+        <rect x="14" y="16" width="12" height="8" fill="white"/>
+        <rect x="18" y="12" width="8" height="6" fill="white"/>
+        <rect x="6" y="22" width="6" height="6" fill="white"/>
+        <rect x="28" y="20" width="6" height="8" fill="white"/>
+        <rect x="10" y="23" width="7" height="5" fill="none" stroke="#c03a3a" stroke-width="0.9"/>
+        <rect x="21" y="23" width="7" height="5" fill="none" stroke="#c03a3a" stroke-width="0.9"/>
+        <line x1="17" y1="25.5" x2="21" y2="25.5" stroke="#c03a3a" stroke-width="0.9"/>
+        <line x1="10" y1="25.5" x2="8" y2="25.5" stroke="#c03a3a" stroke-width="0.9"/>
+        <line x1="28" y1="25.5" x2="30" y2="25.5" stroke="#c03a3a" stroke-width="0.9"/>
+      </svg>
+    </div>
+    <span class="sidebar-wordmark">claudy.app</span>
+  </div>
+  <a href="#colors" class="sidebar-nav-item"><span class="nav-num">01</span>Colors</a>
+  <a href="#typography" class="sidebar-nav-item"><span class="nav-num">02</span>Typography</a>
+  <a href="#components" class="sidebar-nav-item"><span class="nav-num">03</span>Components</a>
+  <a href="#spacing" class="sidebar-nav-item"><span class="nav-num">04</span>Spacing</a>
+  <a href="#animations" class="sidebar-nav-item"><span class="nav-num">05</span>Animations</a>
+  <a href="#logo" class="sidebar-nav-item"><span class="nav-num">06</span>Logo</a>
+  <a href="#icons" class="sidebar-nav-item"><span class="nav-num">07</span>Icons</a>
+</nav>
+
+<div class="container">
+
+  <header>
+    <div class="logo-mark">
+      <svg width="72" height="64" viewBox="3 10 34 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="10" y="22" width="20" height="10" fill="white"/>
+        <rect x="14" y="16" width="12" height="8" fill="white"/>
+        <rect x="18" y="12" width="8"  height="6" fill="white"/>
+        <rect x="6"  y="22" width="6"  height="6"  fill="white"/>
+        <rect x="28" y="20" width="6"  height="8"  fill="white"/>
+        <rect x="10" y="23" width="7" height="5" fill="none" stroke="#c03a3a" stroke-width="0.9"/>
+        <rect x="21" y="23" width="7" height="5" fill="none" stroke="#c03a3a" stroke-width="0.9"/>
+        <line x1="17" y1="25.5" x2="21" y2="25.5" stroke="#c03a3a" stroke-width="0.9"/>
+        <line x1="10" y1="25.5" x2="8"  y2="25.5" stroke="#c03a3a" stroke-width="0.9"/>
+        <line x1="28" y1="25.5" x2="30" y2="25.5" stroke="#c03a3a" stroke-width="0.9"/>
+      </svg>
+    </div>
+    <div class="logo-wordmark">claudy.app</div>
+    <div class="doc-title">Design Book v1.0</div>
+  </header>
+
+  <!-- 01 COLORS -->
+  <section id="colors">
+    <div class="section-header">
+      <span class="section-num">01</span>
+      <h2>Colors</h2>
+    </div>
+    <p class="section-intro">
+      Monochromatic foundation with a single accent. The red (#e8474a) is the only color — everything else is grayscale. This creates a technical, focused aesthetic that reflects the product's purpose.
+    </p>
+
+    <div class="grid grid-4">
+      <div class="color-card">
+        <div class="color-swatch dark" style="background: #0f0f0f;">#0f0f0f</div>
+        <div class="color-info">
+          <div class="color-name">Background</div>
+          <div class="color-value">Primary surface</div>
+          <div class="color-usage">App background, pages</div>
+        </div>
+      </div>
+
+      <div class="color-card">
+        <div class="color-swatch dark" style="background: #161616;">#161616</div>
+        <div class="color-info">
+          <div class="color-name">Surface</div>
+          <div class="color-value">Secondary surface</div>
+          <div class="color-usage">Cards, panels</div>
+        </div>
+      </div>
+
+      <div class="color-card">
+        <div class="color-swatch dark" style="background: #1a1a1a;">#1a1a1a</div>
+        <div class="color-info">
+          <div class="color-name">Input</div>
+          <div class="color-value">Tertiary surface</div>
+          <div class="color-usage">Inputs, code blocks</div>
+        </div>
+      </div>
+
+      <div class="color-card">
+        <div class="color-swatch light" style="background: #e8474a;">#e8474a</div>
+        <div class="color-info">
+          <div class="color-name">Accent</div>
+          <div class="color-value">Primary accent</div>
+          <div class="color-usage">Buttons, status, focus</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-4" style="margin-top: 20px;">
+      <div class="color-card">
+        <div class="color-swatch dark" style="background: #e8e8e8;">#e8e8e8</div>
+        <div class="color-info">
+          <div class="color-name">Text</div>
+          <div class="color-value">Primary text</div>
+          <div class="color-usage">Headings, body</div>
+        </div>
+      </div>
+
+      <div class="color-card">
+        <div class="color-swatch dark" style="background: #6e6e6e;">#6e6e6e</div>
+        <div class="color-info">
+          <div class="color-name">Muted</div>
+          <div class="color-value">Secondary text</div>
+          <div class="color-usage">Descriptions, meta</div>
+        </div>
+      </div>
+
+      <div class="color-card">
+        <div class="color-swatch dark" style="background: #3a3a3a;">#3a3a3a</div>
+        <div class="color-info">
+          <div class="color-name">Dim</div>
+          <div class="color-value">Tertiary text</div>
+          <div class="color-usage">Labels, placeholders</div>
+        </div>
+      </div>
+
+      <div class="color-card">
+        <div class="color-swatch light" style="background: #ffffff;">#ffffff</div>
+        <div class="color-info">
+          <div class="color-name">White</div>
+          <div class="color-value">Pure white</div>
+          <div class="color-usage">Logo icon, highlights</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-3" style="margin-top: 20px;">
+      <div class="color-card">
+        <div class="color-swatch dark" style="background: rgba(232,71,74,0.12);">rgba(232,71,74,0.12)</div>
+        <div class="color-info">
+          <div class="color-name">Red Glow</div>
+          <div class="color-value">12% opacity</div>
+          <div class="color-usage">Button backgrounds</div>
+        </div>
+      </div>
+
+      <div class="color-card">
+        <div class="color-swatch dark" style="background: rgba(232,71,74,0.06);">rgba(232,71,74,0.06)</div>
+        <div class="color-info">
+          <div class="color-name">Red Glow 2</div>
+          <div class="color-value">6% opacity</div>
+          <div class="color-usage">Badge backgrounds</div>
+        </div>
+      </div>
+
+      <div class="color-card">
+        <div class="color-swatch dark" style="background: #c03a3a;">#c03a3a</div>
+        <div class="color-info">
+          <div class="color-name">Red Dark</div>
+          <div class="color-value">Dark variant</div>
+          <div class="color-usage">Icon strokes, hover</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 TYPOGRAPHY -->
+  <section id="typography">
+    <div class="section-header">
+      <span class="section-num">02</span>
+      <h2>Typography</h2>
+    </div>
+    <p class="section-intro">
+      Geist Mono for all UI text. Geist (sans) for body copy only. The monospace font creates a technical, precise feel that matches the infrastructure nature of the product.
+    </p>
+
+    <div class="grid grid-2">
+      <div class="type-card">
+        <div class="type-label">Geist Mono — Display</div>
+        <div class="type-sample-mono">claudy.app</div>
+        <div class="type-specs">
+          <span class="spec"><strong>Size:</strong> 16px</span>
+          <span class="spec"><strong>Weight:</strong> 500</span>
+          <span class="spec"><strong>Letter:</strong> 0.08em</span>
+        </div>
+      </div>
+
+      <div class="type-card">
+        <div class="type-label">Geist Mono — Heading</div>
+        <div class="type-sample-mono-small">Cloud Source · WebDAV · Devices</div>
+        <div class="type-specs">
+          <span class="spec"><strong>Size:</strong> 18px</span>
+          <span class="spec"><strong>Weight:</strong> 500</span>
+          <span class="spec"><strong>Letter:</strong> 0.04em</span>
+        </div>
+      </div>
+
+      <div class="type-card">
+        <div class="type-label">Geist Mono — Body</div>
+        <div class="type-sample-mono-small" style="font-size: 13px; color: var(--text-muted);">
+          https://dav.claudy.app/username<br>
+          /Users/name/CloudFolder<br>
+          Active now · 2 hours ago
+        </div>
+        <div class="type-specs">
+          <span class="spec"><strong>Size:</strong> 12-13px</span>
+          <span class="spec"><strong>Weight:</strong> 400</span>
+          <span class="spec"><strong>Letter:</strong> 0.04em</span>
+        </div>
+      </div>
+
+      <div class="type-card">
+        <div class="type-label">Geist — Long Form</div>
+        <div class="type-sample-body">
+          Mount this address as a network drive on any device. Works on iOS, Android, Windows, macOS, and Linux without additional software.
+        </div>
+        <div class="type-specs">
+          <span class="spec"><strong>Size:</strong> 14-15px</span>
+          <span class="spec"><strong>Weight:</strong> 400</span>
+          <span class="spec"><strong>Letter:</strong> normal</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top: 32px;">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Element</th>
+            <th>Font</th>
+            <th>Size</th>
+            <th>Weight</th>
+            <th>Letter-spacing</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Logo wordmark</td>
+            <td><code>Geist Mono</code></td>
+            <td><code>14px</code></td>
+            <td><code>500</code></td>
+            <td><code>0.08em</code></td>
+          </tr>
+          <tr>
+            <td>Section headers</td>
+            <td><code>Geist Mono</code></td>
+            <td><code>16px</code></td>
+            <td><code>500</code></td>
+            <td><code>0.04em</code></td>
+          </tr>
+          <tr>
+            <td>Card titles</td>
+            <td><code>Geist Mono</code></td>
+            <td><code>10px</code></td>
+            <td><code>500</code></td>
+            <td><code>0.08em</code></td>
+          </tr>
+          <tr>
+            <td>Body text</td>
+            <td><code>Geist Mono</code></td>
+            <td><code>12-13px</code></td>
+            <td><code>400</code></td>
+            <td><code>0.04em</code></td>
+          </tr>
+          <tr>
+            <td>Buttons</td>
+            <td><code>Geist Mono</code></td>
+            <td><code>11px</code></td>
+            <td><code>500</code></td>
+            <td><code>0.06em</code></td>
+          </tr>
+          <tr>
+            <td>Badges</td>
+            <td><code>Geist Mono</code></td>
+            <td><code>9px</code></td>
+            <td><code>500</code></td>
+            <td><code>0.08em</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 03 COMPONENTS -->
+  <section id="components">
+    <div class="section-header">
+      <span class="section-num">03</span>
+      <h2>Components</h2>
+    </div>
+    <p class="section-intro">
+      Minimal, functional components with sharp edges (2px radius). No shadows, no gradients. Borders are thin (1px) and subtle. The red accent is used sparingly for primary actions and active states.
+    </p>
+
+    <h3 style="font-family: 'Geist Mono', monospace; font-size: 12px; font-weight: 500; color: var(--text-dim); margin: 32px 0 20px; letter-spacing: 0.04em; text-transform: uppercase;">Buttons</h3>
+    <div class="grid grid-3">
+      <div class="component-card">
+        <div class="component-preview">
+          <button class="btn btn-primary">Primary</button>
+        </div>
+        <div class="component-info">
+          <div class="component-name">Primary</div>
+          <div class="component-desc">Main actions. Red background, white text. Use sparingly — one per section.</div>
+        </div>
+      </div>
+
+      <div class="component-card">
+        <div class="component-preview">
+          <button class="btn btn-secondary">Secondary</button>
+        </div>
+        <div class="component-info">
+          <div class="component-name">Secondary</div>
+          <div class="component-desc">Secondary actions. Transparent with border. Most common button type.</div>
+        </div>
+      </div>
+
+      <div class="component-card">
+        <div class="component-preview">
+          <button class="btn btn-ghost">Ghost</button>
+        </div>
+        <div class="component-info">
+          <div class="component-name">Ghost</div>
+          <div class="component-desc">Tertiary actions. Muted color, subtle border. For low-emphasis actions.</div>
+        </div>
+      </div>
+    </div>
+
+    <h3 style="font-family: 'Geist Mono', monospace; font-size: 12px; font-weight: 500; color: var(--text-dim); margin: 32px 0 20px; letter-spacing: 0.04em; text-transform: uppercase;">Cards</h3>
+    <div class="grid grid-2">
+      <div class="component-card">
+        <div class="component-preview">
+          <div class="demo-card">
+            <div class="demo-card-header">
+              <span class="demo-card-title">Cloud Source</span>
+              <span class="badge badge-red">Online</span>
+            </div>
+            <div class="demo-card-body">
+              MacBook Pro<br>
+              <span style="color: var(--text-dim);">/Users/name/Cloud</span>
+            </div>
+          </div>
+        </div>
+        <div class="component-info">
+          <div class="component-name">Status Card</div>
+          <div class="component-desc">Shows source computer status. Title, badge, device name, and path.</div>
+        </div>
+      </div>
+
+      <div class="component-card">
+        <div class="component-preview">
+          <div class="demo-card">
+            <div class="demo-card-header">
+              <span class="demo-card-title">WebDAV Address</span>
+            </div>
+            <div class="demo-card-body" style="background: var(--bg3); padding: 10px; border-radius: var(--radius); border: 1px solid var(--border);">
+              dav.claudy.app/user
+            </div>
+          </div>
+        </div>
+        <div class="component-info">
+          <div class="component-name">Data Card</div>
+          <div class="component-desc">Displays copyable data. Address shown in monospace with darker background.</div>
+        </div>
+      </div>
+    </div>
+
+    <h3 style="font-family: 'Geist Mono', monospace; font-size: 12px; font-weight: 500; color: var(--text-dim); margin: 32px 0 20px; letter-spacing: 0.04em; text-transform: uppercase;">Form Elements</h3>
+    <div class="grid grid-3">
+      <div class="component-card">
+        <div class="component-preview">
+          <input type="text" class="input-demo" placeholder="Enter email...">
+        </div>
+        <div class="component-info">
+          <div class="component-name">Text Input</div>
+          <div class="component-desc">Dark background, subtle border. Red border on focus. Monospace font.</div>
+        </div>
+      </div>
+
+      <div class="component-card">
+        <div class="component-preview">
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <span class="badge badge-red">Active</span>
+            <span class="badge badge-muted">Free</span>
+          </div>
+        </div>
+        <div class="component-info">
+          <div class="component-name">Badges</div>
+          <div class="component-desc">Small status indicators. Red for active states, muted for neutral.</div>
+        </div>
+      </div>
+
+      <div class="component-card">
+        <div class="component-preview">
+          <div class="status-row">
+            <div class="status-dot active"></div>
+            <span style="font-family: 'Geist Mono', monospace; font-size: 11px; color: var(--text-muted);">Online</span>
+          </div>
+        </div>
+        <div class="component-info">
+          <div class="component-name">Status Dot</div>
+          <div class="component-desc">8px red dot with glow for online. Gray dot for offline/inactive.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 04 SPACING -->
+  <section id="spacing">
+    <div class="section-header">
+      <span class="section-num">04</span>
+      <h2>Spacing</h2>
+    </div>
+    <p class="section-intro">
+      4px base unit. All spacing values are multiples of 4. Sharp corners (2px radius) maintain the technical aesthetic.
+    </p>
+
+    <div class="grid grid-5">
+      <div class="spacing-item">
+        <div class="spacing-bar" style="width: 4px;"></div>
+        <div class="spacing-value">4px</div>
+        <div class="spacing-label">XS</div>
+      </div>
+
+      <div class="spacing-item">
+        <div class="spacing-bar" style="width: 8px;"></div>
+        <div class="spacing-value">8px</div>
+        <div class="spacing-label">SM</div>
+      </div>
+
+      <div class="spacing-item">
+        <div class="spacing-bar" style="width: 12px;"></div>
+        <div class="spacing-value">12px</div>
+        <div class="spacing-label">MD</div>
+      </div>
+
+      <div class="spacing-item">
+        <div class="spacing-bar" style="width: 16px;"></div>
+        <div class="spacing-value">16px</div>
+        <div class="spacing-label">LG</div>
+      </div>
+
+      <div class="spacing-item">
+        <div class="spacing-bar" style="width: 20px;"></div>
+        <div class="spacing-value">20px</div>
+        <div class="spacing-label">XL</div>
+      </div>
+    </div>
+
+    <div class="grid grid-4" style="margin-top: 20px;">
+      <div class="spacing-item">
+        <div class="spacing-bar" style="width: 24px;"></div>
+        <div class="spacing-value">24px</div>
+        <div class="spacing-label">2XL</div>
+      </div>
+
+      <div class="spacing-item">
+        <div class="spacing-bar" style="width: 32px;"></div>
+        <div class="spacing-value">32px</div>
+        <div class="spacing-label">3XL</div>
+      </div>
+
+      <div class="spacing-item">
+        <div class="spacing-bar" style="width: 40px;"></div>
+        <div class="spacing-value">40px</div>
+        <div class="spacing-label">4XL</div>
+      </div>
+
+      <div class="spacing-item">
+        <div class="spacing-bar" style="width: 48px;"></div>
+        <div class="spacing-value">48px</div>
+        <div class="spacing-label">5XL</div>
+      </div>
+    </div>
+
+    <div style="margin-top: 32px;">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Element</th>
+            <th>Padding</th>
+            <th>Gap</th>
+            <th>Border Radius</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Cards</td>
+            <td><code>20px</code></td>
+            <td><code>14px</code></td>
+            <td><code>2px</code></td>
+          </tr>
+          <tr>
+            <td>Buttons</td>
+            <td><code>10px 18px</code></td>
+            <td><code>8px</code></td>
+            <td><code>2px</code></td>
+          </tr>
+          <tr>
+            <td>Inputs</td>
+            <td><code>11px 14px</code></td>
+            <td>—</td>
+            <td><code>2px</code></td>
+          </tr>
+          <tr>
+            <td>Badges</td>
+            <td><code>4px 10px</code></td>
+            <td>—</td>
+            <td><code>2px</code></td>
+          </tr>
+          <tr>
+            <td>Section spacing</td>
+            <td><code>80px</code></td>
+            <td><code>32px</code></td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 05 ANIMATIONS -->
+  <section id="animations">
+    <div class="section-header">
+      <span class="section-num">05</span>
+      <h2>Animations</h2>
+    </div>
+    <p class="section-intro">
+      Subtle, functional animations. No decorative motion. All animations are short (0.15s-0.4s) with simple easing. The only continuous animation is the status indicator blink.
+    </p>
+
+    <div class="grid grid-4">
+      <div class="anim-card">
+        <div class="anim-box anim-fade"></div>
+        <div class="anim-name">Fade In</div>
+        <div class="anim-timing">0.4s ease</div>
+      </div>
+
+      <div class="anim-card">
+        <div class="anim-box anim-slide"></div>
+        <div class="anim-name">Slide Up</div>
+        <div class="anim-timing">0.4s ease</div>
+      </div>
+
+      <div class="anim-card">
+        <div class="anim-box anim-pulse"></div>
+        <div class="anim-name">Pulse</div>
+        <div class="anim-timing">2s infinite</div>
+      </div>
+
+      <div class="anim-card">
+        <div class="anim-box anim-blink"></div>
+        <div class="anim-name">Blink</div>
+        <div class="anim-timing">1.5s step-end</div>
+      </div>
+    </div>
+
+    <div style="margin-top: 32px;">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Animation</th>
+            <th>Duration</th>
+            <th>Easing</th>
+            <th>Use Case</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Fade In</td>
+            <td><code>0.4s</code></td>
+            <td><code>ease</code></td>
+            <td>Page load, modal open</td>
+          </tr>
+          <tr>
+            <td>Slide Up</td>
+            <td><code>0.4s</code></td>
+            <td><code>ease</code></td>
+            <td>Cards appearing, lists</td>
+          </tr>
+          <tr>
+            <td>Pulse</td>
+            <td><code>2s</code></td>
+            <td><code>ease-in-out</code></td>
+            <td>Active status indicator</td>
+          </tr>
+          <tr>
+            <td>Blink</td>
+            <td><code>1.5s</code></td>
+            <td><code>step-end</code></td>
+            <td>Cursor, recording indicator</td>
+          </tr>
+          <tr>
+            <td>Hover</td>
+            <td><code>0.15s</code></td>
+            <td><code>ease</code></td>
+            <td>Button, card hover states</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 06 LOGO -->
+  <section id="logo">
+    <div class="section-header">
+      <span class="section-num">06</span>
+      <h2>Logo</h2>
+    </div>
+    <p class="section-intro">
+      The logo is a pixel-art cloud made of white rectangles on a red square. The wordmark is always in Geist Mono, lowercase. The red square can be used as a standalone icon.
+    </p>
+
+    <div class="grid grid-3">
+      <div class="logo-variant">
+        <div class="logo-icon-only">
+          <svg width="72" height="64" viewBox="3 10 34 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="10" y="22" width="20" height="10" fill="white"/>
+            <rect x="14" y="16" width="12" height="8" fill="white"/>
+            <rect x="18" y="12" width="8"  height="6" fill="white"/>
+            <rect x="6"  y="22" width="6"  height="6"  fill="white"/>
+            <rect x="28" y="20" width="6"  height="8"  fill="white"/>
+            <rect x="10" y="23" width="7" height="5" fill="none" stroke="#c03a3a" stroke-width="0.9"/>
+            <rect x="21" y="23" width="7" height="5" fill="none" stroke="#c03a3a" stroke-width="0.9"/>
+            <line x1="17" y1="25.5" x2="21" y2="25.5" stroke="#c03a3a" stroke-width="0.9"/>
+            <line x1="10" y1="25.5" x2="8"  y2="25.5" stroke="#c03a3a" stroke-width="0.9"/>
+            <line x1="28" y1="25.5" x2="30" y2="25.5" stroke="#c03a3a" stroke-width="0.9"/>
+          </svg>
+        </div>
+        <div class="logo-text">claudy.app</div>
+        <div class="logo-sub">Icon + Wordmark (dark)</div>
+      </div>
+
+      <div class="logo-variant light">
+        <div class="logo-icon-only">
+          <svg width="72" height="64" viewBox="3 10 34 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="10" y="22" width="20" height="10" fill="white"/>
+            <rect x="14" y="16" width="12" height="8" fill="white"/>
+            <rect x="18" y="12" width="8"  height="6" fill="white"/>
+            <rect x="6"  y="22" width="6"  height="6"  fill="white"/>
+            <rect x="28" y="20" width="6"  height="8"  fill="white"/>
+            <rect x="10" y="23" width="7" height="5" fill="none" stroke="#c03a3a" stroke-width="0.9"/>
+            <rect x="21" y="23" width="7" height="5" fill="none" stroke="#c03a3a" stroke-width="0.9"/>
+            <line x1="17" y1="25.5" x2="21" y2="25.5" stroke="#c03a3a" stroke-width="0.9"/>
+            <line x1="10" y1="25.5" x2="8"  y2="25.5" stroke="#c03a3a" stroke-width="0.9"/>
+            <line x1="28" y1="25.5" x2="30" y2="25.5" stroke="#c03a3a" stroke-width="0.9"/>
+          </svg>
+        </div>
+        <div class="logo-text">claudy.app</div>
+        <div class="logo-sub">Icon + Wordmark (light)</div>
+      </div>
+
+      <div class="logo-variant">
+        <div class="logo-icon-only" style="width: 48px; height: 48px;">
+          <svg width="36" height="32" viewBox="3 10 34 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="10" y="22" width="20" height="10" fill="white"/>
+            <rect x="14" y="16" width="12" height="8" fill="white"/>
+            <rect x="18" y="12" width="8"  height="6" fill="white"/>
+            <rect x="6"  y="22" width="6"  height="6"  fill="white"/>
+            <rect x="28" y="20" width="6"  height="8"  fill="white"/>
+            <rect x="10" y="23" width="7" height="5" fill="none" stroke="#c03a3a" stroke-width="0.9"/>
+            <rect x="21" y="23" width="7" height="5" fill="none" stroke="#c03a3a" stroke-width="0.9"/>
+            <line x1="17" y1="25.5" x2="21" y2="25.5" stroke="#c03a3a" stroke-width="0.9"/>
+            <line x1="10" y1="25.5" x2="8"  y2="25.5" stroke="#c03a3a" stroke-width="0.9"/>
+            <line x1="28" y1="25.5" x2="30" y2="25.5" stroke="#c03a3a" stroke-width="0.9"/>
+          </svg>
+        </div>
+        <div class="logo-sub">Icon only (favicon)</div>
+      </div>
+    </div>
+
+    <div style="margin-top: 32px;">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Rule</th>
+            <th>Specification</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Minimum size</td>
+            <td><code>48px</code> for icon, <code>88px</code> for full logo</td>
+          </tr>
+          <tr>
+            <td>Clear space</td>
+            <td>Equal to icon height on all sides</td>
+          </tr>
+          <tr>
+            <td>Colors</td>
+            <td>Red square: <code>#e8474a</code>, Icon: white, Strokes: <code>#c03a3a</code></td>
+          </tr>
+          <tr>
+            <td>Wordmark font</td>
+            <td><code>Geist Mono 500</code>, lowercase, <code>0.08em</code> letter-spacing</td>
+          </tr>
+          <tr>
+            <td>Do not</td>
+            <td>Stretch, rotate, add effects, change colors, or modify the icon</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 07 ICONS -->
+  <section id="icons">
+    <div class="section-header">
+      <span class="section-num">07</span>
+      <h2>Icons</h2>
+    </div>
+    <p class="section-intro">
+      Emoji for platforms and devices — universal, colorful, friendly. Simple stroke SVG icons for actions — consistent, technical, precise.
+    </p>
+
+    <h3 style="font-family: 'Geist Mono', monospace; font-size: 12px; font-weight: 500; color: var(--text-dim); margin: 32px 0 20px; letter-spacing: 0.04em; text-transform: uppercase;">Platform Icons</h3>
+    <div class="icon-grid">
+      <div class="icon-item">
+        <div class="icon-glyph"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg></div>
+        <div class="icon-label">Mobile</div>
+      </div>
+      <div class="icon-item">
+        <div class="icon-glyph"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="13" rx="2"/><path d="M0 21h24"/></svg></div>
+        <div class="icon-label">Laptop</div>
+      </div>
+      <div class="icon-item">
+        <div class="icon-glyph"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></div>
+        <div class="icon-label">Desktop</div>
+      </div>
+      <div class="icon-item">
+        <div class="icon-glyph"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></div>
+        <div class="icon-label">Folder</div>
+      </div>
+      <div class="icon-item">
+        <div class="icon-glyph"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg></div>
+        <div class="icon-label">Cloud</div>
+      </div>
+      <div class="icon-item">
+        <div class="icon-glyph"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+        <div class="icon-label">Secure</div>
+      </div>
+    </div>
+
+    <h3 style="font-family: 'Geist Mono', monospace; font-size: 12px; font-weight: 500; color: var(--text-dim); margin: 32px 0 20px; letter-spacing: 0.04em; text-transform: uppercase;">Action Icons (SVG)</h3>
+    <div class="icon-grid">
+      <div class="icon-item">
+        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <div class="icon-label">Download</div>
+      </div>
+      <div class="icon-item">
+        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        <div class="icon-label">Copy</div>
+      </div>
+      <div class="icon-item">
+        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="20,6 9,17 4,12"/></svg>
+        <div class="icon-label">Check</div>
+      </div>
+      <div class="icon-item">
+        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        <div class="icon-label">Close</div>
+      </div>
+      <div class="icon-item">
+        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <div class="icon-label">Settings</div>
+      </div>
+      <div class="icon-item">
+        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16,17 21,12 16,7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        <div class="icon-label">Logout</div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="footer-left">
+      claudy.app · Design Book v1.0
+    </div>
+    <div class="footer-right">
+      2026 · Personal Cloud Infrastructure
+    </div>
+  </footer>
+
+</div>
+
+</body>
+</html>
