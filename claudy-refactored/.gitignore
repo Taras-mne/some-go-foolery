@@ -1,0 +1,8 @@
+.DS_Store
+.claude/
+claudy-app/build/bin/
+claudy-core/daemon
+claudy-core/relay
+claudy-core/relay2
+claudy-core/relay_new
+*.log

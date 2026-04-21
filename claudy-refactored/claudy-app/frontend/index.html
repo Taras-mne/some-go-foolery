@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claudy</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0f0f0f; --surface: #1a1a1a; --border: #2a2a2a;
+    --text: #f0f0f0; --muted: #888; --accent: #c03a3a;
+    --accent-hover: #d44; --green: #3cb371; --input: #222; --radius: 8px;
+  }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; height: 100vh; display: flex; flex-direction: column; overflow: hidden; user-select: none; }
+  .titlebar { height: 28px; -webkit-app-region: drag; background: var(--bg); flex-shrink: 0; }
+
+  /* Auth */
+  .auth-wrap { flex: 1; display: flex; align-items: center; justify-content: center; }
+  .auth-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 36px; width: 360px; }
+  .auth-logo { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; }
+  .auth-logo span { font-size: 18px; font-weight: 600; }
+  .auth-card h2 { font-size: 20px; margin-bottom: 6px; }
+  .auth-card p { color: var(--muted); margin-bottom: 24px; font-size: 13px; }
+  .auth-tabs { display: flex; margin-bottom: 20px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .auth-tab { flex: 1; padding: 8px; text-align: center; cursor: pointer; font-size: 13px; color: var(--muted); }
+  .auth-tab.active { background: var(--accent); color: white; }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 5px; text-transform: uppercase; letter-spacing: .04em; }
+  .field input { width: 100%; background: var(--input); border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 12px; color: var(--text); font-size: 14px; outline: none; }
+  .field input:focus { border-color: var(--accent); }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 16px; border-radius: var(--radius); border: none; cursor: pointer; font-size: 14px; font-weight: 500; transition: background .15s, opacity .15s; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .btn-primary { background: var(--accent); color: white; width: 100%; margin-top: 4px; }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+  .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .btn-ghost:hover { color: var(--text); background: var(--surface); }
+  .error-msg { color: #e05; font-size: 13px; margin-bottom: 12px; display: none; padding: 8px 12px; background: rgba(220,0,80,.08); border-radius: var(--radius); }
+
+  /* App */
+  #app { display: none; flex: 1; overflow: hidden; }
+  .layout { display: flex; height: 100%; }
+  .sidebar { width: 200px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 20px 0; flex-shrink: 0; }
+  .sidebar-logo { display: flex; align-items: center; gap: 10px; padding: 0 20px 20px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+  .sidebar-logo span { font-weight: 600; font-size: 16px; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 20px; cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 500; transition: all .15s; }
+  .nav-item:hover { color: var(--text); background: rgba(255,255,255,.04); }
+  .nav-item.active { color: var(--text); background: rgba(192,58,58,.12); border-right: 2px solid var(--accent); }
+  .nav-item svg { width: 16px; height: 16px; flex-shrink: 0; }
+  .sidebar-bottom { margin-top: auto; padding: 12px 20px 0; border-top: 1px solid var(--border); }
+  .user-info { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .user-info strong { color: var(--text); display: block; font-size: 13px; }
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .page { flex: 1; overflow-y: auto; padding: 28px; display: none; }
+  .page.active { display: block; }
+  .page-title { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+  .page-sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+
+  /* Status card */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  .status-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex-shrink: 0; transition: background .3s; }
+  .dot.green { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot.red { background: var(--accent); }
+  .status-label { font-size: 15px; font-weight: 600; }
+  .status-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .info-item { background: var(--bg); border-radius: 6px; padding: 10px 12px; }
+  .info-item .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 3px; }
+  .info-item .val { font-size: 12px; word-break: break-all; }
+  .actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+  .folder-path { font-size: 12px; font-family: monospace; background: var(--bg); padding: 10px 12px; border-radius: 6px; margin-bottom: 12px; color: var(--muted); min-height: 36px; word-break: break-all; }
+  .folder-path.set { color: var(--text); }
+
+  /* Files page */
+  #page-files { padding: 0; }
+  .files-frame { width: 100%; height: 100%; border: none; display: block; }
+
+  /* Settings */
+  .settings-section { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 14px; }
+  .settings-section h3 { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 14px; }
+</style>
+</head>
+<body>
+
+<div class="titlebar"></div>
+
+<!-- Auth screen -->
+<div class="auth-wrap" id="authScreen">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <svg width="26" height="22" viewBox="3 10 34 24" fill="none"><rect x="10" y="22" width="20" height="10" fill="white"/><rect x="14" y="16" width="12" height="8" fill="white"/><rect x="18" y="12" width="8" height="6" fill="white"/><rect x="6" y="22" width="6" height="6" fill="white"/><rect x="28" y="20" width="6" height="8" fill="white"/><rect x="10" y="23" width="7" height="5" fill="none" stroke="#c03a3a" stroke-width="0.9"/><rect x="21" y="23" width="7" height="5" fill="none" stroke="#c03a3a" stroke-width="0.9"/><line x1="17" y1="25.5" x2="21" y2="25.5" stroke="#c03a3a" stroke-width="0.9"/><line x1="10" y1="25.5" x2="8" y2="25.5" stroke="#c03a3a" stroke-width="0.9"/><line x1="28" y1="25.5" x2="30" y2="25.5" stroke="#c03a3a" stroke-width="0.9"/></svg>
+      <span>claudy</span>
+    </div>
+    <h2>Welcome to Claudy</h2>
+    <p>Your laptop is your personal cloud</p>
+    <div class="auth-tabs">
+      <div class="auth-tab active" id="tabLogin" onclick="switchTab('login')">Log in</div>
+      <div class="auth-tab" id="tabRegister" onclick="switchTab('register')">Create account</div>
+    </div>
+    <div class="error-msg" id="authError"></div>
+    <div class="field"><label>Server URL</label><input type="url" id="serverUrl" value="http://23.172.217.149"></div>
+    <div class="field"><label>Username</label><input type="text" id="authUser" autocomplete="username"></div>
+    <div class="field"><label>Password</label><input type="password" id="authPass" autocomplete="current-password"></div>
+    <button class="btn btn-primary" id="authBtn" onclick="doAuth()">Sign in</button>
+  </div>
+</div>
+
+<!-- App shell -->
+<div id="app">
+  <div class="layout">
+    <div class="sidebar">
+      <div class="sidebar-logo">
+        <svg width="20" height="17" viewBox="3 10 34 24" fill="none"><rect x="10" y="22" width="20" height="10" fill="white"/><rect x="14" y="16" width="12" height="8" fill="white"/><rect x="18" y="12" width="8" height="6" fill="white"/><rect x="6" y="22" width="6" height="6" fill="white"/><rect x="28" y="20" width="6" height="8" fill="white"/></svg>
+        <span>Claudy</span>
+      </div>
+      <div class="nav-item active" id="nav-device" onclick="showPage('device')">
+        <svg fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="13" rx="2"/><path d="M0 21h24"/></svg>My Device
+      </div>
+      <div class="nav-item" id="nav-files" onclick="showPage('files')">
+        <svg fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24"><path d="M3 3h6l2 3h10a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/></svg>Files
+      </div>
+      <div class="nav-item" id="nav-settings" onclick="showPage('settings')">
+        <svg fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Settings
+      </div>
+      <div class="sidebar-bottom">
+        <div class="user-info"><strong id="sidebarUser">—</strong>Signed in</div>
+        <button class="btn btn-ghost" style="width:100%;font-size:12px;padding:6px" onclick="doLogout()">Sign out</button>
+      </div>
+    </div>
+
+    <div class="main">
+      <!-- My Device -->
+      <div class="page active" id="page-device">
+        <div class="page-title">My Device</div>
+        <div class="page-sub">This computer shares files with your other devices</div>
+        <div class="card">
+          <div class="status-row">
+            <div class="dot" id="statusDot"></div>
+            <div><div class="status-label" id="statusLabel">Checking…</div><div class="status-sub" id="statusSub"></div></div>
+          </div>
+          <div class="info-grid">
+            <div class="info-item"><div class="lbl">Relay</div><div class="val" id="infoRelay">—</div></div>
+            <div class="info-item"><div class="lbl">WebDAV URL</div><div class="val" id="infoDav">—</div></div>
+          </div>
+          <div class="actions">
+            <button class="btn btn-primary" onclick="callGo('OpenWebUI')">Open Web UI</button>
+            <button class="btn btn-ghost" onclick="callGo('OpenFolder')">Open Folder</button>
+            <button class="btn btn-ghost" onclick="refreshStatus()">Refresh</button>
+          </div>
+        </div>
+        <div class="card">
+          <div style="font-size:13px;font-weight:600;margin-bottom:10px;">Shared Folder</div>
+          <div class="folder-path" id="folderPath">No folder selected</div>
+          <button class="btn btn-ghost" onclick="changeFolder()">Change Folder…</button>
+        </div>
+      </div>
+
+      <!-- Files -->
+      <div class="page" id="page-files">
+        <iframe id="filesFrame" class="files-frame" src="about:blank"></iframe>
+      </div>
+
+      <!-- Settings -->
+      <div class="page" id="page-settings">
+        <div class="page-title">Settings</div>
+        <div class="page-sub">Configure your Claudy daemon</div>
+        <div class="settings-section">
+          <h3>Server</h3>
+          <div class="field"><label>Relay URL</label><input type="url" id="settingsRelay"></div>
+          <button class="btn btn-primary" style="width:auto" onclick="saveSettings()">Save</button>
+        </div>
+        <div class="settings-section">
+          <h3>Account</h3>
+          <div class="field"><label>Username</label><input type="text" id="settingsUser" disabled style="opacity:.6"></div>
+          <button class="btn btn-ghost" onclick="doLogout()">Sign out</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const go = () => window.go?.main?.App;
+const callGo = (fn, ...args) => go()?.[fn]?.(...args);
+
+let authMode = 'login';
+let cfg = {};
+
+function switchTab(mode) {
+  authMode = mode;
+  document.getElementById('tabLogin').classList.toggle('active', mode === 'login');
+  document.getElementById('tabRegister').classList.toggle('active', mode === 'register');
+  document.getElementById('authBtn').textContent = mode === 'login' ? 'Sign in' : 'Create account';
+}
+
+async function doAuth() {
+  const btn = document.getElementById('authBtn');
+  const errEl = document.getElementById('authError');
+  const server = document.getElementById('serverUrl').value.trim().replace(/\/+$/, '');
+  const user = document.getElementById('authUser').value.trim();
+  const pass = document.getElementById('authPass').value;
+  if (!server || !user || !pass) { showErr('All fields are required'); return; }
+  btn.disabled = true; btn.textContent = '…'; errEl.style.display = 'none';
+  try {
+    if (authMode === 'register') await callGo('Register', server, user, pass);
+    await callGo('Login', server, user, pass);
+    await enterApp();
+  } catch(e) { showErr(e.toString()); }
+  finally { btn.disabled = false; btn.textContent = authMode === 'login' ? 'Sign in' : 'Create account'; }
+}
+
+function showErr(msg) {
+  const el = document.getElementById('authError');
+  el.textContent = msg; el.style.display = 'block';
+}
+
+let _statusInterval = null;
+async function enterApp() {
+  cfg = await callGo('GetConfig') ?? {};
+  document.getElementById('authScreen').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  document.getElementById('sidebarUser').textContent = cfg.username || '—';
+  document.getElementById('settingsRelay').value = cfg.relay_url || '';
+  document.getElementById('settingsUser').value = cfg.username || '';
+  document.getElementById('filesFrame').src = (cfg.relay_url || '') + '/';
+  refreshStatus();
+  if (_statusInterval) clearInterval(_statusInterval);
+  _statusInterval = setInterval(refreshStatus, 5000);
+}
+
+async function refreshStatus() {
+  const s = await callGo('GetStatus') ?? {};
+  const dot = document.getElementById('statusDot');
+  const label = document.getElementById('statusLabel');
+  const sub = document.getElementById('statusSub');
+  if (s.connected) {
+    dot.className = 'dot green'; label.textContent = 'Connected'; sub.textContent = 'Daemon is running and sharing your folder';
+  } else if (s.running) {
+    dot.className = 'dot'; label.textContent = 'Relay online'; sub.textContent = 'Daemon not connected — start it to share files';
+  } else {
+    dot.className = 'dot red'; label.textContent = 'Offline'; sub.textContent = 'Cannot reach relay server';
+  }
+  document.getElementById('infoRelay').textContent = s.relay_url || '—';
+  document.getElementById('infoDav').textContent = s.relay_url ? s.relay_url + '/dav/' + s.username + '/' : '—';
+  const fp = document.getElementById('folderPath');
+  fp.textContent = s.share_dir || 'No folder selected';
+  fp.className = 'folder-path' + (s.share_dir ? ' set' : '');
+}
+
+async function changeFolder() {
+  const dir = await callGo('PickFolder');
+  if (dir) { document.getElementById('folderPath').textContent = dir; document.getElementById('folderPath').className = 'folder-path set'; }
+}
+
+async function saveSettings() {
+  const relay = document.getElementById('settingsRelay').value.trim();
+  try { await callGo('Login', relay, cfg.username, cfg.password); alert('Saved!'); } catch(e) { alert('Error: ' + e); }
+}
+
+async function doLogout() {
+  if (_statusInterval) { clearInterval(_statusInterval); _statusInterval = null; }
+  await callGo('Logout');
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('authScreen').style.display = 'flex';
+}
+
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => { p.classList.remove('active'); p.style.display = 'none'; });
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  const page = document.getElementById('page-' + name);
+  const nav = document.getElementById('nav-' + name);
+  if (page) { page.style.display = name === 'files' ? 'flex' : 'block'; page.classList.add('active'); }
+  if (nav) nav.classList.add('active');
+}
+
+window.addEventListener('load', async () => {
+  if (!window.go?.main?.App) return; // dev mode
+  const c = await callGo('GetConfig');
+  if (c?.username && c?.password) await enterApp();
+});
+
+document.getElementById('authPass').addEventListener('keydown', e => { if (e.key === 'Enter') doAuth(); });
+</script>
+</body>
+</html>

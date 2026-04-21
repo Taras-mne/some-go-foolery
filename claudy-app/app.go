@@ -50,7 +50,7 @@ type App struct {
 type Config struct {
 	RelayURL string `json:"relay_url"`
 	Username string `json:"username"`
-	Password string `json:"password"`
+	Password string `json:"-"`
 	ShareDir string `json:"share_dir"`
 }
 
@@ -107,7 +107,28 @@ func loadConfig() *Config {
 		return &Config{RelayURL: "http://23.172.217.149"}
 	}
 	var c Config
-	json.Unmarshal(data, &c)
+	if err := json.Unmarshal(data, &c); err != nil {
+		return &Config{RelayURL: "http://23.172.217.149"}
+	}
+
+	// Migrate: old configs stored the password as "password" in JSON.
+	// If present, move it into the keyring and rewrite the file without it.
+	var legacy struct {
+		Password string `json:"password"`
+	}
+	_ = json.Unmarshal(data, &legacy)
+	if legacy.Password != "" && c.Username != "" {
+		if err := savePassword(c.Username, legacy.Password); err == nil {
+			c.Password = legacy.Password
+			clean, _ := json.MarshalIndent(&c, "", "  ")
+			_ = os.WriteFile(configPath(), clean, 0600)
+		} else {
+			c.Password = legacy.Password
+		}
+	} else {
+		c.Password = loadPassword(c.Username)
+	}
+
 	return &c
 }
 
@@ -314,7 +335,9 @@ func buildWSURL(relayURL, token string) (string, error) {
 // -----------------------------------------------------------------------
 
 func (a *App) GetConfig() *Config {
-	return a.config
+	safe := *a.config
+	safe.Password = ""
+	return &safe
 }
 
 func (a *App) GetStatus() DaemonStatus {
@@ -351,6 +374,9 @@ func (a *App) Login(relayURL, username, password string) (string, error) {
 	a.config.Username = username
 	a.config.Password = password
 	a.saveConfig()
+	if err := savePassword(username, password); err != nil {
+		return "", fmt.Errorf("cannot save credentials to keyring: %v", err)
+	}
 	a.restartDaemon()
 	return result["token"], nil
 }
@@ -422,6 +448,7 @@ func (a *App) OpenFolder() {
 }
 
 func (a *App) Logout() {
+	deletePassword(a.config.Username)
 	a.config.Username = ""
 	a.config.Password = ""
 	a.saveConfig()
