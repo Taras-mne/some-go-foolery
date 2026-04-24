@@ -1,22 +1,16 @@
-# Compiled binaries
-/daemon
-/daemon-windows-amd64.exe
-/relay
-/relay-linux-amd64
-*.exe
-
 # macOS
 .DS_Store
 
-# Data / secrets
-/data/
-/shared_files/
-/test_shared/
-*.json
-!go.sum
+# Claude Code worktrees / local agent state
+.claude/
 
-# claudy-p2p (Phase A)
+# Logs
+*.log
+
+# Prebuilt binaries (produced by `go build`)
+*.exe
 claudy-p2p/dist/
-# identity seeds must never be committed (0600, per-host)
+
+# Identity seeds & TOFU keyring must never be committed (0600, per-host)
 **/identity.key
 **/known_peers.json
