@@ -24,6 +24,7 @@ import (
 
 	"github.com/claudy/p2p/internal/identity"
 	"github.com/claudy/p2p/internal/peer"
+	"github.com/claudy/p2p/internal/powerlock"
 	"github.com/claudy/p2p/internal/secure"
 	"github.com/claudy/p2p/internal/signaling"
 	"github.com/pion/webrtc/v4"
@@ -227,6 +228,14 @@ func main() {
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	log.Info("dav-owner starting", "dir", *dir, "room", *room)
+
+	// Keep the host awake for the lifetime of the owner. Without this
+	// the laptop idle-sleeps after ~5-15 min, tearing down the WebDAV
+	// server and breaking any live viewer mount. We can't serve files
+	// while the CPU is halted — sleep must be blocked, not worked
+	// around. Release fires via defer after the shutdown signal below.
+	sleepLock := powerlock.Acquire(log)
+	defer sleepLock.Release()
 
 	id, err := identity.LoadOrCreate(*identityDir)
 	if err != nil {
