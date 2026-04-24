@@ -6,3 +6,9 @@ claudy-core/relay
 claudy-core/relay2
 claudy-core/relay_new
 *.log
+
+# claudy-p2p (Phase A)
+claudy-p2p/dist/
+# identity seeds must never be committed (0600, per-host)
+**/identity.key
+**/known_peers.json
