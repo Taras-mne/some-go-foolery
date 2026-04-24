@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claudy</title>
+<style>
+  :root {
+    --bg: #0f0f0f;
+    --surface: #161616;
+    --border: rgba(255,255,255,0.08);
+    --text: #e8e8e8;
+    --text-dim: #6e6e6e;
+    --accent: #e8474a;
+    --good: #4ade80;
+    --warn: #facc15;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #fafafa;
+      --surface: #ffffff;
+      --border: rgba(0,0,0,0.08);
+      --text: #0f0f0f;
+      --text-dim: #666;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+  }
+  .app {
+    width: 100%; max-width: 480px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 32px;
+  }
+  h1 {
+    font-size: 24px; font-weight: 600; letter-spacing: -0.01em;
+    margin-bottom: 6px;
+  }
+  .subtitle { color: var(--text-dim); font-size: 14px; margin-bottom: 28px; }
+  .btn {
+    display: block; width: 100%;
+    padding: 14px; margin-bottom: 10px;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    font-size: 15px; font-weight: 500; cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    text-align: left;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn-primary { background: var(--accent); color: white; border-color: var(--accent); }
+  .btn-primary:hover { background: #c03a3a; border-color: #c03a3a; }
+  .btn-ghost { background: transparent; color: var(--text-dim); font-size: 13px; }
+  .btn-ghost:hover { color: var(--text); border-color: var(--border); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn .emoji { font-size: 18px; margin-right: 10px; vertical-align: -2px; }
+  .btn .label { font-weight: 600; }
+  .btn .desc { display: block; margin-top: 4px; font-size: 12px; color: var(--text-dim); font-weight: 400; }
+  .btn-primary .desc { color: rgba(255,255,255,0.75); }
+  input[type=text] {
+    width: 100%; padding: 12px 14px;
+    background: transparent; color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    font-size: 14px; font-family: ui-monospace, monospace;
+    margin-bottom: 10px;
+  }
+  input[type=text]:focus { outline: none; border-color: var(--accent); }
+  .row { display: flex; gap: 8px; }
+  .row input { flex: 1; margin: 0; }
+  .row button { flex: 0 0 auto; width: auto; padding: 12px 20px; margin: 0; }
+  .hidden { display: none !important; }
+  .back { margin-bottom: 16px; }
+  .status {
+    margin-top: 20px; padding: 16px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .status-line { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .status-line:last-child { margin-bottom: 0; }
+  .status-label { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+  .status-value { font-family: ui-monospace, monospace; font-size: 14px; }
+  .state-waiting { color: var(--warn); }
+  .state-paired, .state-connected { color: var(--good); }
+  .state-reconnecting, .state-starting { color: var(--warn); }
+  .state-stopped, .state-failed { color: var(--accent); }
+  .room-code {
+    font-family: ui-monospace, monospace;
+    font-size: 28px; font-weight: 700; letter-spacing: 0.08em;
+    padding: 20px; margin: 16px 0;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    text-align: center; text-transform: uppercase;
+    cursor: pointer; user-select: all;
+  }
+  .room-code-hint { font-size: 12px; color: var(--text-dim); text-align: center; margin-top: -8px; margin-bottom: 16px; }
+  .logs {
+    max-height: 180px; overflow-y: auto;
+    font-family: ui-monospace, monospace; font-size: 11px; color: var(--text-dim);
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; margin-top: 16px;
+    white-space: pre-wrap; word-break: break-all;
+    line-height: 1.5;
+  }
+  .error {
+    padding: 12px; margin-bottom: 12px;
+    background: rgba(232,71,74,0.1); border: 1px solid var(--accent); border-radius: 8px;
+    color: var(--accent); font-size: 13px;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Idle: pick role -->
+  <div id="screen-home">
+    <h1>Claudy</h1>
+    <div class="subtitle">Share a folder directly between your devices — no cloud, no account.</div>
+    <button class="btn btn-primary" onclick="pickAndShare()">
+      <span class="emoji">📁</span><span class="label">Share a folder</span>
+      <span class="desc">Pick a folder on this computer to expose to a friend.</span>
+    </button>
+    <button class="btn" onclick="showConnect()">
+      <span class="emoji">🔗</span><span class="label">Connect to a shared folder</span>
+      <span class="desc">Paste a code from someone sharing a folder with you.</span>
+    </button>
+  </div>
+
+  <!-- Share: error fallback screen (only shown if picker fails / manual path needed) -->
+  <div id="screen-share-pick" class="hidden">
+    <button class="btn btn-ghost back" onclick="showHome()">← Back</button>
+    <h1>Share a folder</h1>
+    <div class="subtitle">Couldn't open the folder picker. Paste a path instead:</div>
+    <div id="share-err" class="error hidden"></div>
+    <input id="share-dir" type="text" placeholder="/Users/you/Shared" autofocus>
+    <button class="btn btn-primary" onclick="startShare()">
+      <span class="label">Start sharing</span>
+    </button>
+  </div>
+
+  <!-- Share: running -->
+  <div id="screen-share-running" class="hidden">
+    <button class="btn btn-ghost back" onclick="stop()">← Stop sharing</button>
+    <h1>You're sharing</h1>
+    <div class="subtitle">Send this code to your friend:</div>
+    <div class="room-code" id="share-code" title="Click to copy">—</div>
+    <div class="room-code-hint">Click to copy</div>
+    <div class="status">
+      <div class="status-line">
+        <span class="status-label">Folder</span>
+        <span class="status-value" id="share-dir-display">—</span>
+      </div>
+      <div class="status-line">
+        <span class="status-label">Status</span>
+        <span class="status-value" id="share-state">—</span>
+      </div>
+      <div class="status-line">
+        <span class="status-label">Uptime</span>
+        <span class="status-value" id="share-uptime">—</span>
+      </div>
+    </div>
+    <div class="logs" id="share-logs"></div>
+  </div>
+
+  <!-- Connect: paste code -->
+  <div id="screen-connect-code" class="hidden">
+    <button class="btn btn-ghost back" onclick="showHome()">← Back</button>
+    <h1>Connect to a friend</h1>
+    <div class="subtitle">Paste the code they sent you.</div>
+    <div id="connect-err" class="error hidden"></div>
+    <input id="connect-room" type="text" placeholder="abc123" autofocus>
+    <button class="btn btn-primary" onclick="startConnect()">
+      <span class="label">Connect</span>
+    </button>
+  </div>
+
+  <!-- Connect: running -->
+  <div id="screen-connect-running" class="hidden">
+    <button class="btn btn-ghost back" onclick="stop()">← Disconnect</button>
+    <h1>Connected</h1>
+    <div class="subtitle" id="connect-mount-info">Looking for your friend's folder…</div>
+    <div class="status">
+      <div class="status-line">
+        <span class="status-label">Code</span>
+        <span class="status-value" id="connect-code-display">—</span>
+      </div>
+      <div class="status-line">
+        <span class="status-label">Status</span>
+        <span class="status-value" id="connect-state">—</span>
+      </div>
+      <div class="status-line">
+        <span class="status-label">Mounted at</span>
+        <span class="status-value" id="connect-mount-path">—</span>
+      </div>
+      <div class="status-line">
+        <span class="status-label">Uptime</span>
+        <span class="status-value" id="connect-uptime">—</span>
+      </div>
+    </div>
+    <div class="logs" id="connect-logs"></div>
+  </div>
+
+</div>
+
+<script>
+const screens = ['screen-home','screen-share-pick','screen-share-running','screen-connect-code','screen-connect-running'];
+function show(id) {
+  screens.forEach(s => document.getElementById(s).classList.toggle('hidden', s !== id));
+}
+function showHome()     { show('screen-home'); }
+function showShare()    { show('screen-share-pick'); }
+function showConnect()  { show('screen-connect-code'); }
+
+function setError(id, msg) {
+  const el = document.getElementById(id);
+  if (!msg) { el.classList.add('hidden'); el.textContent = ''; return; }
+  el.classList.remove('hidden'); el.textContent = msg;
+}
+
+async function post(url, body) {
+  const r = await fetch(url, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body||{}) });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function get(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+async function pickAndShare() {
+  // Open the OS-native folder picker. If the user cancels, the endpoint
+  // returns 204 and we just stay on home. If the picker itself fails
+  // (edge OS, no zenity, etc.) we fall back to the manual-input screen
+  // so the flow still completes somehow.
+  let picked;
+  try {
+    const r = await fetch('/api/pick-dir', { method: 'POST' });
+    if (r.status === 204) return;      // user canceled — stay on home
+    if (!r.ok) throw new Error(await r.text());
+    const body = await r.json();
+    picked = body.dir;
+  } catch (e) {
+    // Picker unavailable — show the manual path input.
+    show('screen-share-pick');
+    setError('share-err', 'Folder picker failed: ' + e.message + ' — paste a path instead.');
+    return;
+  }
+  if (!picked) return;
+  try {
+    const s = await post('/api/share', { dir: picked });
+    renderShare(s);
+    show('screen-share-running');
+  } catch (e) {
+    show('screen-share-pick');
+    document.getElementById('share-dir').value = picked;
+    setError('share-err', e.message);
+  }
+}
+
+// Kept for the fallback screen.
+async function startShare() {
+  setError('share-err', null);
+  const dir = document.getElementById('share-dir').value.trim();
+  try {
+    const s = await post('/api/share', { dir });
+    renderShare(s);
+    show('screen-share-running');
+  } catch (e) {
+    setError('share-err', e.message);
+  }
+}
+
+async function startConnect() {
+  setError('connect-err', null);
+  const room = document.getElementById('connect-room').value.trim();
+  try {
+    const s = await post('/api/connect', { room });
+    renderConnect(s);
+    show('screen-connect-running');
+  } catch (e) {
+    setError('connect-err', e.message);
+  }
+}
+
+async function stop() {
+  try { await post('/api/stop', {}); } catch (e) {}
+  show('screen-home');
+}
+
+function fmtUptime(secs) {
+  if (!secs) return '—';
+  if (secs < 60) return secs + 's';
+  if (secs < 3600) return Math.floor(secs/60) + 'm ' + (secs%60) + 's';
+  const h = Math.floor(secs/3600), m = Math.floor((secs%3600)/60);
+  return h + 'h ' + m + 'm';
+}
+
+function stateClass(s) {
+  if (!s) return '';
+  return 'state-' + s.replace(/[^a-z]/g, '');
+}
+
+function renderShare(s) {
+  document.getElementById('share-code').textContent = (s.room || '—').toUpperCase();
+  document.getElementById('share-dir-display').textContent = s.dir || '—';
+  const st = document.getElementById('share-state');
+  st.textContent = s.state || '—';
+  st.className = 'status-value ' + stateClass(s.state);
+  document.getElementById('share-uptime').textContent = fmtUptime(s.uptime_secs);
+  const logs = (s.recent_logs || []).slice(-30).join('\n');
+  document.getElementById('share-logs').textContent = logs;
+}
+
+function renderConnect(s) {
+  document.getElementById('connect-code-display').textContent = (s.room || '—').toUpperCase();
+  const st = document.getElementById('connect-state');
+  st.textContent = s.state || '—';
+  st.className = 'status-value ' + stateClass(s.state);
+  document.getElementById('connect-mount-path').textContent = s.mount_path || '(waiting)';
+  document.getElementById('connect-uptime').textContent = fmtUptime(s.uptime_secs);
+  if (s.mount_path) {
+    document.getElementById('connect-mount-info').textContent = 'Your friend\'s folder is open in ' + (s.mount_path.startsWith('/') ? 'Finder' : 'Explorer') + '.';
+  }
+  const logs = (s.recent_logs || []).slice(-30).join('\n');
+  document.getElementById('connect-logs').textContent = logs;
+}
+
+// Poll status every second and, if a session is active, update the
+// matching screen. If role cleared (child died), bounce to home.
+async function tick() {
+  try {
+    const s = await get('/api/status');
+    if (s.role === 'share') {
+      renderShare(s);
+      show('screen-share-running');
+    } else if (s.role === 'connect') {
+      renderConnect(s);
+      show('screen-connect-running');
+    } else {
+      // idle → stay on whatever picker screen the user is on
+      const anyPicker = !document.getElementById('screen-share-pick').classList.contains('hidden')
+                     || !document.getElementById('screen-connect-code').classList.contains('hidden');
+      if (!anyPicker) show('screen-home');
+    }
+  } catch (e) {
+    // UI can't talk to backend — backend probably shutting down.
+  }
+}
+setInterval(tick, 1000);
+tick();
+
+// Click-to-copy on the room code
+document.getElementById('share-code').addEventListener('click', e => {
+  const txt = e.currentTarget.textContent.trim();
+  if (txt && txt !== '—' && navigator.clipboard) {
+    navigator.clipboard.writeText(txt.toLowerCase());
+    e.currentTarget.style.borderColor = 'var(--good)';
+    setTimeout(() => e.currentTarget.style.borderColor = '', 600);
+  }
+});
+</script>
+</body>
+</html>
