@@ -38,27 +38,72 @@ import (
 // failed handshake is logged and the underlying conn is dropped; Accept
 // continues rather than returning — one bad viewer attempt must not
 // kill the whole http.Server.
+//
+// Handshakes run in parallel: a single acceptor goroutine drains the
+// inner listener, spawning one handshake goroutine per raw conn. Ready
+// secure conns land on `ready` and Accept just drains that channel.
+// Without this fan-out, one slow handshake (10 s deadline inside
+// secure.Server) would block every subsequent incoming DC. We hit that
+// symptom under bulk upload: one DC got stuck behind a saturated SCTP
+// pipeline and all later DCs opened during the same window timed out
+// their own Noise handshake because Accept wasn't ready for them yet.
 type secureListener struct {
 	inner   net.Listener
 	myPriv  ed25519.PrivateKey
 	peerPub ed25519.PublicKey
 	log     *slog.Logger
+
+	ready    chan net.Conn
+	acceptCh chan error // terminal error from inner.Accept
+	startOne sync.Once
+}
+
+// serveAccept is spawned lazily on the first Accept call. It owns the
+// inner listener and the fan-out of handshakes; on inner close it
+// records the error in acceptCh and closes ready so pending Accept
+// callers return cleanly.
+func (l *secureListener) serveAccept() {
+	go func() {
+		for {
+			raw, err := l.inner.Accept()
+			if err != nil {
+				l.acceptCh <- err
+				close(l.ready)
+				return
+			}
+			// Spawn per-conn handshake so this loop never blocks on one
+			// slow peer. Success → push to ready; failure → log + close.
+			go func(c net.Conn) {
+				sec, err := secure.Server(c, l.myPriv, l.peerPub)
+				if err != nil {
+					l.log.Warn("noise handshake failed; dropping conn", "err", err)
+					_ = c.Close()
+					return
+				}
+				// Non-blocking send: if http.Server isn't currently
+				// pulling from Accept (e.g. right after startup) the
+				// buffered channel absorbs a burst. If even the buffer
+				// is full, drop to keep memory bounded rather than
+				// pile up stale conns forever.
+				select {
+				case l.ready <- sec:
+				default:
+					l.log.Warn("secure listener backlog full; dropping conn")
+					_ = sec.Close()
+				}
+			}(raw)
+		}
+	}()
 }
 
 func (l *secureListener) Accept() (net.Conn, error) {
-	for {
-		raw, err := l.inner.Accept()
-		if err != nil {
-			return nil, err
-		}
-		sec, err := secure.Server(raw, l.myPriv, l.peerPub)
-		if err != nil {
-			l.log.Warn("noise handshake failed; dropping conn", "err", err)
-			_ = raw.Close()
-			continue
-		}
-		return sec, nil
+	l.startOne.Do(l.serveAccept)
+	c, ok := <-l.ready
+	if !ok {
+		// Inner listener closed; acceptCh holds the actual error.
+		return nil, <-l.acceptCh
 	}
+	return c, nil
 }
 
 func (l *secureListener) Close() error   { return l.inner.Close() }
@@ -268,13 +313,14 @@ func main() {
 	defer listener.Close()
 
 	handler := &webdav.Handler{
-		// Hide filesystem-junk (AppleDouble sidecars, .DS_Store,
-		// Thumbs.db, etc.) from the remote viewer. They're noise on the
-		// wire: every one spawns its own WebDAV round-trip = DataChannel
-		// = Noise handshake. During a 1 GB upload we saw a handful of
-		// new DCs time out just trying to write ._sidecar files;
-		// filtering at the FS layer makes those requests invisible.
-		FileSystem: ownerfs.FilterJunk(webdav.Dir(*dir)),
+		// Two FS wrappers, outer-in:
+		//   1. FilterJunk — reject AppleDouble / .DS_Store / Thumbs.db
+		//      etc. before they eat a DataChannel each.
+		//   2. NormalizeNFC — collapse Unicode NFD (the form Finder
+		//      sends Cyrillic/European names in) to NFC so files
+		//      created on Windows and on macOS resolve to the same
+		//      inode, eliminating ghost duplicates in the listing.
+		FileSystem: ownerfs.FilterJunk(ownerfs.NormalizeNFC(webdav.Dir(*dir))),
 		LockSystem: webdav.NewMemLS(),
 		Logger: func(r *http.Request, err error) {
 			if err != nil {
@@ -317,7 +363,18 @@ func main() {
 	// Now that we know the viewer's pinned pubkey, start serving WebDAV
 	// through the secure listener. Every inbound DC completes a fresh
 	// Noise_IK handshake before any HTTP byte is parsed.
-	secLn := &secureListener{inner: listener, myPriv: id.Private, peerPub: peerPub, log: log}
+	// `ready` buffer absorbs a burst of concurrent handshakes completing
+	// between Accept calls — Finder routinely opens 4-8 DCs for a bulk
+	// copy. Larger than we expect to need, small enough that a dead
+	// http.Server doesn't leak unbounded memory.
+	secLn := &secureListener{
+		inner:    listener,
+		myPriv:   id.Private,
+		peerPub:  peerPub,
+		log:      log,
+		ready:    make(chan net.Conn, 16),
+		acceptCh: make(chan error, 1),
+	}
 	go func() {
 		if err := srv.Serve(secLn); err != nil && err != http.ErrServerClosed {
 			log.Error("http.Serve", "err", err)
