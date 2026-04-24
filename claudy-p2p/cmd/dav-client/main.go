@@ -149,6 +149,14 @@ func (s *viewerSession) rebuild() error {
 		}
 		switch st {
 		case webrtc.PeerConnectionStateConnected:
+			// Log the actually-chosen ICE path so we can tell whether this
+			// session went direct (host/srflx) or through TURN (relay).
+			// Drives the "how many users actually need relay?" metric.
+			lt, rt, la, ra := peer.SelectedPath(pc)
+			s.log.Info("ice selected",
+				"epoch", epoch,
+				"local", lt, "remote", rt,
+				"local_addr", la, "remote_addr", ra)
 			select {
 			case <-connCh:
 			default:

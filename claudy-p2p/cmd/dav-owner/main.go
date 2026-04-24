@@ -151,6 +151,14 @@ func (s *ownerSession) buildPC() error {
 			return
 		}
 		switch st {
+		case webrtc.PeerConnectionStateConnected:
+			// Mirror of dav-client: log the actual ICE path so the relay
+			// share can be measured from either side independently.
+			lt, rt, la, ra := peer.SelectedPath(pc)
+			s.log.Info("ice selected",
+				"epoch", epoch,
+				"local", lt, "remote", rt,
+				"local_addr", la, "remote_addr", ra)
 		case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed:
 			s.log.Warn("peer connection terminal; rebuilding", "epoch", epoch, "state", st.String())
 			s.requestRebuild()

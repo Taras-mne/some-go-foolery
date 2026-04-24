@@ -6,18 +6,67 @@ package peer
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/claudy/p2p/internal/signaling"
 	"github.com/pion/webrtc/v4"
 )
 
-// DefaultICEServers uses public STUN only. TURN will be added later.
+// DefaultICEServers returns the STUN + TURN servers ICE should use.
+//
+// STUN is harmless to advertise and costs nothing: pion only uses it to
+// discover its server-reflexive address. TURN, on the other hand, is
+// consulted only when direct P2P paths (host↔host, srflx↔srflx) fail
+// — ICE's prioritization keeps relay candidates strictly last. So
+// listing a TURN URL here does NOT mean every connection hairpins
+// through our VPS; only the ~5-10% of sessions whose NAT is symmetric
+// end up using it. The other 90% pay nothing beyond one extra
+// STUN/Allocate round-trip during candidate gathering.
+//
+// TURN credentials are embedded in the binary. This is fine at this
+// stage: a leaked credential lets an attacker use our relay for
+// arbitrary UDP, but that's bandwidth theft, not a data compromise —
+// Noise still authenticates both endpoints over any transport. When
+// abuse shows up in practice we'll switch to the use-auth-secret flow
+// and mint time-limited credentials from the Claudy daemon. Env var
+// CLAUDY_TURN_SECRET overrides the baked-in secret so we can rotate
+// without rebuilding binaries.
 func DefaultICEServers() []webrtc.ICEServer {
+	turnSecret := os.Getenv("CLAUDY_TURN_SECRET")
+	if turnSecret == "" {
+		turnSecret = defaultTURNSecret
+	}
 	return []webrtc.ICEServer{
+		// Public STUN (free, unlimited, run by Cloudflare/Google). Two
+		// providers so a single outage doesn't break candidate gathering.
 		{URLs: []string{"stun:stun.cloudflare.com:3478"}},
 		{URLs: []string{"stun:stun.l.google.com:19302"}},
+
+		// Our TURN. UDP is the happy path; TCP fallback handles
+		// corporate networks that block UDP outright.
+		{
+			URLs:       []string{"turn:23.172.217.149:3478?transport=udp"},
+			Username:   turnUsername,
+			Credential: turnSecret,
+		},
+		{
+			URLs:       []string{"turn:23.172.217.149:3478?transport=tcp"},
+			Username:   turnUsername,
+			Credential: turnSecret,
+		},
 	}
 }
+
+// TURN credentials for the default Claudy relay. Keeping them in a
+// named constant makes it obvious where the secret lives and gives
+// grep-ability during rotation.
+const (
+	turnUsername = "claudy"
+	// Replaced at deploy time (or via CLAUDY_TURN_SECRET env var) when
+	// we rotate. For single-secret LT-cred mech this is the password
+	// portion of the user=claudy:<secret> line in turnserver.conf.
+	defaultTURNSecret = "RjLZy0GjXCCgqXotwKIbcpfeGmjrFhJJ"
+)
 
 // New builds a PeerConnection wired to forward local ICE candidates through
 // sig as soon as they are gathered.
@@ -62,4 +111,39 @@ func ApplyRemote(pc *webrtc.PeerConnection, e signaling.Envelope) (bool, error) 
 		return true, nil
 	}
 	return false, nil
+}
+
+// SelectedPath extracts the currently-negotiated ICE candidate pair
+// from the PeerConnection, flattening it into something trivially
+// loggable. Returns zero strings if ICE has not yet finished (or if
+// any intermediate transport is still being set up by pion).
+//
+// Use it on state=connected to record whether the session used direct
+// P2P or fell back to relay:
+//
+//	local=host|srflx|relay  → our side of the path
+//	remote=host|srflx|relay → peer's side
+//
+// If either side is "relay", TURN is on the path (asymmetric cases
+// like local=relay/remote=srflx still consume relay bandwidth on our
+// side).
+func SelectedPath(pc *webrtc.PeerConnection) (localType, remoteType, localAddr, remoteAddr string) {
+	sctp := pc.SCTP()
+	if sctp == nil {
+		return "", "", "", ""
+	}
+	dtls := sctp.Transport()
+	if dtls == nil {
+		return "", "", "", ""
+	}
+	ice := dtls.ICETransport()
+	if ice == nil {
+		return "", "", "", ""
+	}
+	pair, err := ice.GetSelectedCandidatePair()
+	if err != nil || pair == nil {
+		return "", "", "", ""
+	}
+	return pair.Local.Typ.String(), pair.Remote.Typ.String(),
+		pair.Local.Address, pair.Remote.Address
 }
