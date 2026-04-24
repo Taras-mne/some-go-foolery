@@ -14,3 +14,9 @@
 /test_shared/
 *.json
 !go.sum
+
+# claudy-p2p (Phase A)
+claudy-p2p/dist/
+# identity seeds must never be committed (0600, per-host)
+**/identity.key
+**/known_peers.json
