@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/claudy/p2p/internal/identity"
+	"github.com/claudy/p2p/internal/ownerfs"
 	"github.com/claudy/p2p/internal/peer"
 	"github.com/claudy/p2p/internal/powerlock"
 	"github.com/claudy/p2p/internal/secure"
@@ -267,7 +268,13 @@ func main() {
 	defer listener.Close()
 
 	handler := &webdav.Handler{
-		FileSystem: webdav.Dir(*dir),
+		// Hide filesystem-junk (AppleDouble sidecars, .DS_Store,
+		// Thumbs.db, etc.) from the remote viewer. They're noise on the
+		// wire: every one spawns its own WebDAV round-trip = DataChannel
+		// = Noise handshake. During a 1 GB upload we saw a handful of
+		// new DCs time out just trying to write ._sidecar files;
+		// filtering at the FS layer makes those requests invisible.
+		FileSystem: ownerfs.FilterJunk(webdav.Dir(*dir)),
 		LockSystem: webdav.NewMemLS(),
 		Logger: func(r *http.Request, err error) {
 			if err != nil {
