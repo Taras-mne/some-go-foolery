@@ -197,6 +197,96 @@ func TestConn_CloseUnblocksRead(t *testing.T) {
 	}
 }
 
+func TestConn_BackpressureBoundsBufferedAmount(t *testing.T) {
+	// Regression test for the 500 MB .mov symptom: without BufferedAmount
+	// watermarking, pion's outbound SCTP buffer can grow unbounded when
+	// a writer is faster than the wire, starving other DCs. We assert
+	// here that peer.Conn's flow-control keeps BufferedAmount capped
+	// near highWaterMark even under a firehose of writes.
+	a, b := pairConns(t)
+	defer a.Close()
+	defer b.Close()
+
+	// Keep a reader alive on b so a's Sends actually get consumed end to
+	// end — otherwise loopback pion may back up at a different layer and
+	// confuse the test.
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		buf := make([]byte, 32*1024)
+		for {
+			if _, err := b.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	const total = 8 * 1024 * 1024 // 8 MiB is plenty to blow past 1 MiB
+	payload := make([]byte, 64*1024)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+
+	// Poll BufferedAmount from a separate goroutine during the writes.
+	// We expect it to stay bounded — target is highWaterMark, but pion's
+	// Send can race the check so we allow a generous slop (3x) to avoid
+	// flakes. A missing flow-control regression would let the buffer
+	// grow to ~8 MiB, well past this bound.
+	peakCh := make(chan uint64, 1)
+	stopPolling := make(chan struct{})
+	go func() {
+		var peak uint64
+		ticker := time.NewTicker(2 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopPolling:
+				peakCh <- peak
+				return
+			case <-ticker.C:
+				if v := a.dc.BufferedAmount(); v > peak {
+					peak = v
+				}
+			}
+		}
+	}()
+
+	writeErr := make(chan error, 1)
+	go func() {
+		written := 0
+		for written < total {
+			n, err := a.Write(payload)
+			if err != nil {
+				writeErr <- err
+				return
+			}
+			written += n
+		}
+		writeErr <- nil
+	}()
+
+	if err := <-writeErr; err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	close(stopPolling)
+	peak := <-peakCh
+	_ = a.Close()
+	<-readerDone
+
+	// Allow 3x highWaterMark as a slack upper bound. A broken flow control
+	// would show the peak at close to `total` (8 MiB).
+	maxAllowed := uint64(highWaterMark * 3)
+	if peak > maxAllowed {
+		t.Errorf("BufferedAmount peak = %d bytes; want <= %d (flow control broken)", peak, maxAllowed)
+	}
+	// Sanity: we DID go through flow-control territory, not just push a
+	// tiny amount that never crossed the threshold. If peak is trivially
+	// low the test isn't exercising anything interesting.
+	if peak < lowWaterMark/2 {
+		t.Logf("note: peak BufferedAmount was only %d bytes — test may not have exercised flow control under this load", peak)
+	}
+}
+
 func TestConn_WriteLargerThanMaxMsg(t *testing.T) {
 	// 100KB payload > maxMsgSize (16KB) forces chunking; reader must
 	// reassemble via normal Read loop.
