@@ -67,9 +67,18 @@ func (h *hub) handle(w http.ResponseWriter, r *http.Request) {
 
 	h.log.Info("joined", "room", join.Room, "role", join.Role, "pubkey", truncKey(join.Pubkey))
 
-	// Only viewer triggers "ready" — owner was waiting. Each side gets
-	// the counterpart's pubkey so it can TOFU-check before sending SDP.
-	if join.Role == "viewer" && peer != nil {
+	// The second party to join the room triggers "ready" on BOTH sides,
+	// regardless of whether owner or viewer was first. The original code
+	// only fired ready when viewer arrived last, which produced a silent
+	// deadlock on two realistic flows:
+	//   1. Viewer is long-running (auto-start on laptop boot); owner
+	//      launches later — ready never fires.
+	//   2. Owner process crashes and restarts while viewer is still in
+	//      the room — ready never fires on the fresh owner.
+	// Making both arrival orders symmetrical also matches user intuition
+	// ("both are in → both get paired") and keeps the supervisor's
+	// rebuild-on-failure path working across owner restarts.
+	if peer != nil {
 		_ = peer.ws.WriteJSON(signaling.Envelope{Kind: "ready", Pubkey: join.Pubkey})
 		_ = conn.WriteJSON(signaling.Envelope{Kind: "ready", Pubkey: peer.pubkey})
 	}
