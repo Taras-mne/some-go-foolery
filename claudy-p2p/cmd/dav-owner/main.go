@@ -236,7 +236,17 @@ func (s *ownerSession) buildPC() error {
 
 // handleSignal applies a remote envelope to the live PC. For SDP offers
 // we immediately produce and send an answer (owner is always answerer).
+//
+// Mid-session "ready" means the viewer rejoined our room (e.g. they
+// restarted, or their WS flapped and redialed). Any SDP offer we might
+// have been composing for the old session is now stale. Drop the
+// current PC and rebuild so the fresh viewer can hand us a fresh offer.
 func (s *ownerSession) handleSignal(env signaling.Envelope) {
+	if env.Kind == "ready" {
+		s.log.Info("signaling re-ready; triggering peer rebuild")
+		s.requestRebuild()
+		return
+	}
 	pc := s.currentPC()
 	if pc == nil {
 		s.log.Warn("signal arrived without live pc", "kind", env.Kind)

@@ -195,7 +195,20 @@ func (s *viewerSession) rebuild() error {
 // handleSignal applies an envelope to the current PC. Stale envelopes
 // (e.g. an ICE candidate from a prior epoch arriving after rebuild) are
 // handled at pion level — it will just reject them with a warning.
+//
+// Mid-session "ready": the signaling server re-fires it whenever the
+// counterpart rejoins a room we're still in (owner restart, WS redial
+// after a flap, etc.). When that happens any SDP offer we'd already
+// sent was dropped into an empty room, so our current PC is stuck
+// waiting for an answer that will never arrive. Trigger a fresh
+// rebuild — the supervisor will tear down the stale PC and produce a
+// new offer on the healthy session.
 func (s *viewerSession) handleSignal(env signaling.Envelope) {
+	if env.Kind == "ready" {
+		s.log.Info("signaling re-ready; triggering peer rebuild")
+		s.requestRebuild()
+		return
+	}
 	pc, _ := s.snapshot()
 	if pc == nil {
 		return
