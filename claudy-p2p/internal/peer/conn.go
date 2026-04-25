@@ -102,7 +102,17 @@ func NewConn(dc *webrtc.DataChannel) *Conn {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Conn{
 		dc:     dc,
-		in:     make(chan []byte, 16),
+		// Buffer big enough that a slow consumer (yamux demux + disk
+		// writer at the receiver end of a multi-GB PUT) doesn't park
+		// pion's per-DataChannel read goroutine. Originally 16 — that
+		// gave us ~256 KB of headroom (16 × 16 KB max-msg) and stalled
+		// hard on a 6 GB upload: when NTFS write briefly throttled,
+		// OnMessage blocked sending into this channel, the pion reader
+		// stalled, every yamux stream on the tunnel froze including
+		// signaling keepalives, and the WS got reaped by pong timeout.
+		// 1024 entries × 16 KB = ~16 MB worst-case heap, which is
+		// trivial next to the body it's buffering.
+		in:     make(chan []byte, 1024),
 		bufLow: make(chan struct{}, 1),
 		ctx:    ctx,
 		cancel: cancel,

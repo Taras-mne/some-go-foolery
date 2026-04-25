@@ -1,9 +1,13 @@
 // dav-owner: serve a local directory via WebDAV over P2P DataChannels.
 //
-// Supervised PC: on Failed/Closed the owner tears down and rebuilds the
-// PeerConnection on the same signaling WebSocket, re-wiring the same
-// OnDataChannel handler so new inbound DCs keep flowing into the listener.
-// The http.Server + peer.Listener outlive any number of PC rebuilds.
+// Architecture (post-tunnel-refactor):
+//   - One PeerConnection per epoch. On Failed/Closed we tear down and rebuild.
+//   - One inbound DataChannel labelled "tunnel" per PC. We do Noise_IK once
+//     on it (server side), then yamux server. Every yamux stream becomes
+//     one inbound HTTP request feeding the WebDAV handler.
+//   - The http.Server reads from a streamListener that delivers yamux
+//     streams. The listener and the http.Server outlive every PC rebuild —
+//     when the tunnel dies, in-flight streams EOF and webdavfs retries.
 package main
 
 import (
@@ -26,107 +30,84 @@ import (
 	"github.com/claudy/p2p/internal/ownerfs"
 	"github.com/claudy/p2p/internal/peer"
 	"github.com/claudy/p2p/internal/powerlock"
-	"github.com/claudy/p2p/internal/secure"
 	"github.com/claudy/p2p/internal/signaling"
+	"github.com/claudy/p2p/internal/tunnel"
+	"github.com/hashicorp/yamux"
 	"github.com/pion/webrtc/v4"
 	"golang.org/x/net/webdav"
 )
 
-// secureListener wraps an inner net.Listener (our peer.Listener) so that
-// every accepted connection first completes a Noise_IK handshake as the
-// responder, pinning the initiator to the TOFU-known viewer pubkey. A
-// failed handshake is logged and the underlying conn is dropped; Accept
-// continues rather than returning — one bad viewer attempt must not
-// kill the whole http.Server.
-//
-// Handshakes run in parallel: a single acceptor goroutine drains the
-// inner listener, spawning one handshake goroutine per raw conn. Ready
-// secure conns land on `ready` and Accept just drains that channel.
-// Without this fan-out, one slow handshake (10 s deadline inside
-// secure.Server) would block every subsequent incoming DC. We hit that
-// symptom under bulk upload: one DC got stuck behind a saturated SCTP
-// pipeline and all later DCs opened during the same window timed out
-// their own Noise handshake because Accept wasn't ready for them yet.
-type secureListener struct {
-	inner   net.Listener
-	myPriv  ed25519.PrivateKey
-	peerPub ed25519.PublicKey
-	log     *slog.Logger
-
-	ready    chan net.Conn
-	acceptCh chan error // terminal error from inner.Accept
-	startOne sync.Once
+// streamListener adapts a chan of net.Conn (yamux streams in our case)
+// into a net.Listener so http.Server.Serve can drive it without changes.
+// The channel is closed-tolerant: a Close call signals Accept to return
+// ErrListenerClosed without disturbing producer goroutines.
+type streamListener struct {
+	incoming  <-chan net.Conn
+	closeOnce sync.Once
+	closed    chan struct{}
+	addr      net.Addr
 }
 
-// serveAccept is spawned lazily on the first Accept call. It owns the
-// inner listener and the fan-out of handshakes; on inner close it
-// records the error in acceptCh and closes ready so pending Accept
-// callers return cleanly.
-func (l *secureListener) serveAccept() {
-	go func() {
-		for {
-			raw, err := l.inner.Accept()
-			if err != nil {
-				l.acceptCh <- err
-				close(l.ready)
-				return
-			}
-			// Spawn per-conn handshake so this loop never blocks on one
-			// slow peer. Success → push to ready; failure → log + close.
-			go func(c net.Conn) {
-				sec, err := secure.Server(c, l.myPriv, l.peerPub)
-				if err != nil {
-					l.log.Warn("noise handshake failed; dropping conn", "err", err)
-					_ = c.Close()
-					return
-				}
-				// Non-blocking send: if http.Server isn't currently
-				// pulling from Accept (e.g. right after startup) the
-				// buffered channel absorbs a burst. If even the buffer
-				// is full, drop to keep memory bounded rather than
-				// pile up stale conns forever.
-				select {
-				case l.ready <- sec:
-				default:
-					l.log.Warn("secure listener backlog full; dropping conn")
-					_ = sec.Close()
-				}
-			}(raw)
-		}
-	}()
-}
-
-func (l *secureListener) Accept() (net.Conn, error) {
-	l.startOne.Do(l.serveAccept)
-	c, ok := <-l.ready
-	if !ok {
-		// Inner listener closed; acceptCh holds the actual error.
-		return nil, <-l.acceptCh
+func newStreamListener(in <-chan net.Conn, label string) *streamListener {
+	return &streamListener{
+		incoming: in,
+		closed:   make(chan struct{}),
+		addr:     fakeAddr{label: "stream-listener:" + label},
 	}
-	return c, nil
 }
 
-func (l *secureListener) Close() error   { return l.inner.Close() }
-func (l *secureListener) Addr() net.Addr { return l.inner.Addr() }
+// ErrListenerClosed is returned from Accept after Close.
+var ErrListenerClosed = errors.New("stream listener closed")
 
-// ownerSession holds the currently-live PC as the answerer. It reacts
-// to incoming envelopes (SDP offer from viewer) by answering on the
-// current PC. Failed/Closed triggers a rebuild.
+func (l *streamListener) Accept() (net.Conn, error) {
+	select {
+	case <-l.closed:
+		return nil, ErrListenerClosed
+	case c, ok := <-l.incoming:
+		if !ok {
+			return nil, ErrListenerClosed
+		}
+		return c, nil
+	}
+}
+
+func (l *streamListener) Close() error {
+	l.closeOnce.Do(func() { close(l.closed) })
+	return nil
+}
+
+func (l *streamListener) Addr() net.Addr { return l.addr }
+
+// fakeAddr — http.Server only uses Listener.Addr() for logging.
+type fakeAddr struct{ label string }
+
+func (f fakeAddr) Network() string { return "yamux" }
+func (f fakeAddr) String() string  { return f.label }
+
+// ownerSession holds the currently-live PC + tunnel mux as the answerer.
+// SDP offers from the viewer come in over signaling; we answer on the
+// current PC. Failed/Closed (or yamux death) triggers a rebuild.
 type ownerSession struct {
 	sig      *signaling.Client
 	log      *slog.Logger
-	incoming chan<- *peer.Conn
-	rebuild  chan struct{}
+	myPriv   ed25519.PrivateKey
+	peerPub  ed25519.PublicKey
+	incoming chan<- net.Conn // streams flow here for the http.Server
+
+	rebuild chan struct{}
 
 	mu    sync.Mutex
 	pc    *webrtc.PeerConnection
+	mux   *yamux.Session
 	epoch uint64
 }
 
-func newOwnerSession(sig *signaling.Client, log *slog.Logger, incoming chan<- *peer.Conn) *ownerSession {
+func newOwnerSession(sig *signaling.Client, log *slog.Logger, incoming chan<- net.Conn, myPriv ed25519.PrivateKey, peerPub ed25519.PublicKey) *ownerSession {
 	return &ownerSession{
 		sig:      sig,
 		log:      log,
+		myPriv:   myPriv,
+		peerPub:  peerPub,
 		incoming: incoming,
 		rebuild:  make(chan struct{}, 1),
 	}
@@ -139,8 +120,6 @@ func (s *ownerSession) requestRebuild() {
 	}
 }
 
-// currentPC returns the live PeerConnection. Callers must re-check for nil
-// under the possibility of an in-flight rebuild.
 func (s *ownerSession) currentPC() *webrtc.PeerConnection {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -153,6 +132,9 @@ func (s *ownerSession) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			s.mu.Lock()
+			if s.mux != nil {
+				_ = s.mux.Close()
+			}
 			if s.pc != nil {
 				_ = s.pc.Close()
 			}
@@ -174,6 +156,10 @@ func (s *ownerSession) run(ctx context.Context) {
 
 func (s *ownerSession) buildPC() error {
 	s.mu.Lock()
+	if s.mux != nil {
+		_ = s.mux.Close()
+		s.mux = nil
+	}
 	if s.pc != nil {
 		_ = s.pc.Close()
 		s.pc = nil
@@ -199,8 +185,6 @@ func (s *ownerSession) buildPC() error {
 		}
 		switch st {
 		case webrtc.PeerConnectionStateConnected:
-			// Mirror of dav-client: log the actual ICE path so the relay
-			// share can be measured from either side independently.
 			lt, rt, la, ra := peer.SelectedPath(pc)
 			s.log.Info("ice selected",
 				"epoch", epoch,
@@ -214,20 +198,63 @@ func (s *ownerSession) buildPC() error {
 
 	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
 		s.log.Info("new DataChannel", "epoch", epoch, "label", dc.Label())
-		// "bootstrap" is a viewer-side artefact used purely to force SCTP
-		// negotiation into the initial SDP. It must never be pushed to
-		// the listener — otherwise our secure listener would try a Noise
-		// handshake on an empty channel and waste 10s timing out.
-		if dc.Label() == "bootstrap" {
+		// Anything other than the tunnel is a stale viewer (legacy build)
+		// or noise — ignore safely.
+		if dc.Label() != "tunnel" {
+			s.log.Warn("unexpected DC label; ignoring", "label", dc.Label())
 			return
 		}
 		dc.OnOpen(func() {
-			select {
-			case s.incoming <- peer.NewConn(dc):
-			default:
-				s.log.Warn("incoming backlog full, dropping DC", "label", dc.Label())
-				_ = dc.Close()
+			// Stale-epoch guard: PC may have been torn down between
+			// OnDataChannel and OnOpen during a fast rebuild.
+			s.mu.Lock()
+			if s.epoch != epoch {
+				s.mu.Unlock()
+				return
 			}
+			s.mu.Unlock()
+
+			sess, err := tunnel.Serve(dc, s.myPriv, s.peerPub, s.log)
+			if err != nil {
+				s.log.Error("tunnel serve", "epoch", epoch, "err", err)
+				s.requestRebuild()
+				return
+			}
+			s.mu.Lock()
+			if s.epoch != epoch {
+				s.mu.Unlock()
+				_ = sess.Close()
+				return
+			}
+			s.mux = sess
+			s.mu.Unlock()
+
+			// Each yamux stream becomes one HTTP connection for the
+			// WebDAV handler. AcceptStream blocks until a stream arrives
+			// or the session dies.
+			go func() {
+				for {
+					stream, err := sess.AcceptStream()
+					if err != nil {
+						s.log.Warn("yamux accept", "epoch", epoch, "err", err)
+						return
+					}
+					select {
+					case s.incoming <- stream:
+					default:
+						s.log.Warn("incoming backlog full; closing stream")
+						_ = stream.Close()
+					}
+				}
+			}()
+
+			// Watchdog: surface session death so we rebuild promptly
+			// without waiting for the next pion state callback.
+			go func() {
+				<-sess.CloseChan()
+				s.log.Warn("yamux session closed; rebuilding", "epoch", epoch)
+				s.requestRebuild()
+			}()
 		})
 	})
 
@@ -287,9 +314,7 @@ func main() {
 
 	// Keep the host awake for the lifetime of the owner. Without this
 	// the laptop idle-sleeps after ~5-15 min, tearing down the WebDAV
-	// server and breaking any live viewer mount. We can't serve files
-	// while the CPU is halted — sleep must be blocked, not worked
-	// around. Release fires via defer after the shutdown signal below.
+	// server and breaking any live viewer mount.
 	sleepLock := powerlock.Acquire(log)
 	defer sleepLock.Release()
 
@@ -314,23 +339,22 @@ func main() {
 	defer sig.Close()
 	log.Info("waiting for viewer")
 
-	// The incoming channel + listener outlive every PC rebuild. Each new
-	// DataChannel (possibly from a freshly rebuilt PC) is pushed here.
-	// Buffer keeps a few DCs in flight during the narrow window before
-	// http.Serve starts (after Ready+verify).
-	incoming := make(chan *peer.Conn, 32)
-	listener := peer.NewListener(incoming, "dav-owner")
+	// Streams from yamux flow into here. Generously sized to absorb burst
+	// opens during a tab-flooding webdavfs sync; small enough that a
+	// dead http.Server doesn't leak unbounded memory.
+	incoming := make(chan net.Conn, 64)
+	listener := newStreamListener(incoming, "dav-owner")
 	defer listener.Close()
 
 	handler := &webdav.Handler{
-		// Two FS wrappers, outer-in:
-		//   1. FilterJunk — reject AppleDouble / .DS_Store / Thumbs.db
-		//      etc. before they eat a DataChannel each.
-		//   2. NormalizeNFC — collapse Unicode NFD (the form Finder
-		//      sends Cyrillic/European names in) to NFC so files
-		//      created on Windows and on macOS resolve to the same
-		//      inode, eliminating ghost duplicates in the listing.
-		FileSystem: ownerfs.FilterJunk(ownerfs.NormalizeNFC(webdav.Dir(*dir))),
+		// Layered FS, outer-in:
+		//   1. Cached — TTL-cache Stat / Readdir so Mini-Redirector's
+		//      PROPFIND flood doesn't pin CPU and starve concurrent GETs.
+		//   2. FilterJunk — hide AppleDouble / .DS_Store / Thumbs.db.
+		//   3. NormalizeNFC — collapse macOS NFD names to NFC.
+		//   4. ShareDeleteDir — open files with FILE_SHARE_DELETE on
+		//      Windows so the local user can rm/mv mid-transfer.
+		FileSystem: ownerfs.Cached(ownerfs.FilterJunk(ownerfs.NormalizeNFC(ownerfs.ShareDeleteDir(*dir)))),
 		LockSystem: webdav.NewMemLS(),
 		Logger: func(r *http.Request, err error) {
 			if err != nil {
@@ -345,9 +369,6 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sess := newOwnerSession(sig, log, incoming)
-	go sess.run(ctx)
-
 	peerPubkeyB64, err := sig.Ready()
 	if err != nil {
 		log.Error("ready", "err", err)
@@ -357,9 +378,6 @@ func main() {
 		log.Error("peer verification failed", "err", err)
 		os.Exit(1)
 	}
-	// Noise_IK needs the viewer's pubkey to authenticate incoming DCs.
-	// The signaling server always sends it now; refuse to continue
-	// without one to avoid a degraded no-auth path sneaking in.
 	if peerPubkeyB64 == "" {
 		log.Error("viewer did not announce a pubkey; cannot establish Noise session")
 		os.Exit(1)
@@ -370,23 +388,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Now that we know the viewer's pinned pubkey, start serving WebDAV
-	// through the secure listener. Every inbound DC completes a fresh
-	// Noise_IK handshake before any HTTP byte is parsed.
-	// `ready` buffer absorbs a burst of concurrent handshakes completing
-	// between Accept calls — Finder routinely opens 4-8 DCs for a bulk
-	// copy. Larger than we expect to need, small enough that a dead
-	// http.Server doesn't leak unbounded memory.
-	secLn := &secureListener{
-		inner:    listener,
-		myPriv:   id.Private,
-		peerPub:  peerPub,
-		log:      log,
-		ready:    make(chan net.Conn, 16),
-		acceptCh: make(chan error, 1),
-	}
+	sess := newOwnerSession(sig, log, incoming, id.Private, peerPub)
+	go sess.run(ctx)
+
 	go func() {
-		if err := srv.Serve(secLn); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 			log.Error("http.Serve", "err", err)
 		}
 	}()

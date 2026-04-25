@@ -1,0 +1,13 @@
+# Build artefacts produced by `go build` next to the source tree.
+# We don't ship from git — releases are built fresh into /tmp and uploaded.
+/claudy
+/claudy.exe
+/claudy-dav-client
+/claudy-dav-client.exe
+/claudy-dav-client-linux
+/claudy-dav-owner
+/claudy-dav-owner.exe
+/claudy-dav-owner-linux
+/claudy-linux
+/signal
+*.log

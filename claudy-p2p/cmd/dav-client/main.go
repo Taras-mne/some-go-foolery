@@ -1,19 +1,21 @@
 // dav-client: expose a remote WebDAV owner as a local HTTP endpoint.
 //
-// Supervised PeerConnection: if the PC goes Failed/Closed (ICE timeout,
-// NAT binding expiry, etc.) the supervisor rebuilds it on the same
-// signaling WebSocket — old DataChannels die, new local TCP accepts
-// block on WaitConnected until the fresh PC reaches Connected.
+// Architecture (post-tunnel-refactor):
+//   - One PeerConnection per epoch. On Failed/Closed we tear down and rebuild.
+//   - One DataChannel per PC, label "tunnel". Noise_IK runs once on it.
+//   - A yamux session multiplexes every WebDAV request onto its own logical
+//     stream over the single Noise-secured byte stream. No per-request
+//     handshake; stream open is essentially free.
+//   - Local TCP listener accepts WebDAV clients (Finder/Explorer). Each
+//     accept opens a yamux stream and io.Copy's both directions.
 //
-// Macro flow:
-//  1. Join signaling as "viewer"; supervisor builds PC, creates bootstrap
-//     DC (forces SCTP m-section), sends offer, reads answer via signalLoop.
-//  2. Bind local TCP. For every inbound conn, wait for the *current* PC to
-//     be connected, open a fresh DC on it, io.Copy both directions.
-//  3. On PC failure the supervisor closes the old PC and re-runs (1). The
-//     local listener keeps accepting; pending proxy() goroutines either
-//     finish on the old DC (still carrying its bytes) or, for fresh
-//     accepts, wait up to dcOpenTimeout for the rebuilt PC.
+// Why the rewrite: the previous design opened a fresh DC + Noise per
+// request. Under bursts of small files Finder issued ~8 parallel HTTP
+// requests; the resulting pile of in-flight Noise handshakes raced
+// against an SCTP send queue saturated by the last large body, timed
+// out at 10 s, and the whole mount stalled. yamux gives us per-stream
+// flow control and zero-cost stream creation in exchange for one
+// long-lived secure session.
 package main
 
 import (
@@ -35,73 +37,83 @@ import (
 
 	"github.com/claudy/p2p/internal/identity"
 	"github.com/claudy/p2p/internal/peer"
-	"github.com/claudy/p2p/internal/secure"
 	"github.com/claudy/p2p/internal/signaling"
+	"github.com/claudy/p2p/internal/tunnel"
+	"github.com/hashicorp/yamux"
 	"github.com/pion/webrtc/v4"
 )
 
-// How long a single proxy() goroutine will wait for the current PC to be
-// Connected before giving up on the local TCP accept. WebDAV clients are
-// fine with a few seconds of stall; anything longer and Finder will show
-// a spinner, which is still better than the mount going zombie.
-const dcOpenTimeout = 20 * time.Second
+// Time a single proxy() goroutine will wait for the current tunnel to be
+// ready before giving up on the local TCP accept. WebDAV clients are
+// fine with a few seconds of stall during PC rebuilds; anything longer
+// and Finder will show a spinner, which is still better than the mount
+// going zombie.
+const tunnelReadyTimeout = 20 * time.Second
 
-// viewerSession supervises a single PeerConnection as the offerer side.
-// Only one PC is live at a time; snapshot() hands out the current one
-// along with a "connected" channel that closes when it reaches Connected.
-// On Failed/Closed the supervisor goroutine rebuilds, bumping epoch so
-// stale OnConnectionStateChange callbacks no-op.
+// viewerSession supervises a single PeerConnection + tunnel as the
+// offerer side. Only one (PC, mux) pair is live at a time. On Failed /
+// Closed PC, or yamux session death, the supervisor rebuilds, bumping
+// epoch so stale callbacks no-op.
 type viewerSession struct {
-	sig       *signaling.Client
-	log       *slog.Logger
+	sig     *signaling.Client
+	log     *slog.Logger
+	myPriv  ed25519.PrivateKey
+	peerPub ed25519.PublicKey
+
 	rebuildCh chan struct{}
 
-	mu        sync.Mutex
-	pc        *webrtc.PeerConnection
-	connected chan struct{} // closed on Connected; never re-opened, only replaced
-	epoch     uint64
+	mu    sync.Mutex
+	pc    *webrtc.PeerConnection
+	mux   *yamux.Session
+	ready chan struct{} // closed once mux is established this epoch
+	epoch uint64
 }
 
-func newViewerSession(sig *signaling.Client, log *slog.Logger) *viewerSession {
+func newViewerSession(sig *signaling.Client, log *slog.Logger, myPriv ed25519.PrivateKey, peerPub ed25519.PublicKey) *viewerSession {
 	return &viewerSession{
 		sig:       sig,
 		log:       log,
+		myPriv:    myPriv,
+		peerPub:   peerPub,
 		rebuildCh: make(chan struct{}, 1),
-		connected: make(chan struct{}), // closed on first successful connect
+		ready:     make(chan struct{}),
 	}
 }
 
-// snapshot returns the current PC and the channel that signals its
-// connected state. Both fields are consistent (belong to the same epoch).
-func (s *viewerSession) snapshot() (*webrtc.PeerConnection, chan struct{}) {
+// snapshotMux returns the current yamux session (or nil) and the channel
+// that closes when the *current* session is ready. Both come from the
+// same epoch so callers don't observe a half-installed state.
+func (s *viewerSession) snapshotMux() (*yamux.Session, chan struct{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.pc, s.connected
+	return s.mux, s.ready
 }
 
 func (s *viewerSession) requestRebuild() {
 	select {
 	case s.rebuildCh <- struct{}{}:
-	default: // rebuild already pending
+	default: // already pending
 	}
 }
 
-// run is the supervisor loop. It owns all lifecycle of s.pc.
+// run is the supervisor loop. It owns all lifecycle of s.pc and s.mux.
 func (s *viewerSession) run(ctx context.Context) {
 	s.requestRebuild() // initial build
 	for {
 		select {
 		case <-ctx.Done():
 			s.mu.Lock()
+			if s.mux != nil {
+				_ = s.mux.Close()
+			}
 			if s.pc != nil {
 				_ = s.pc.Close()
 			}
 			s.mu.Unlock()
 			return
 		case <-s.rebuildCh:
-			if err := s.rebuild(); err != nil {
+			if err := s.rebuild(ctx); err != nil {
 				s.log.Error("rebuild peer connection", "err", err)
-				// back off and retry
 				select {
 				case <-ctx.Done():
 					return
@@ -113,8 +125,16 @@ func (s *viewerSession) run(ctx context.Context) {
 	}
 }
 
-func (s *viewerSession) rebuild() error {
+// rebuild tears down the current (PC, mux) and creates a fresh PC + new
+// tunnel DC. The Noise+yamux setup is wired to the DC's OnOpen callback;
+// we don't block in rebuild() waiting for it. The supervisor returns
+// quickly so the next signal envelope can flow into the new PC.
+func (s *viewerSession) rebuild(ctx context.Context) error {
 	s.mu.Lock()
+	if s.mux != nil {
+		_ = s.mux.Close()
+		s.mux = nil
+	}
 	if s.pc != nil {
 		_ = s.pc.Close()
 		s.pc = nil
@@ -127,15 +147,15 @@ func (s *viewerSession) rebuild() error {
 	}
 	s.epoch++
 	epoch := s.epoch
-	// Replace connected channel only if the previous one was already closed
-	// (i.e. a prior PC had reached Connected). Otherwise keep the existing
-	// unclosed channel so early callers don't get a stale "connected".
+	// Replace ready channel only if the previous one was already closed
+	// (i.e. a prior epoch had reached Ready). Otherwise reuse the existing
+	// unclosed channel so early callers don't get stuck on a stale ref.
 	select {
-	case <-s.connected:
-		s.connected = make(chan struct{})
+	case <-s.ready:
+		s.ready = make(chan struct{})
 	default:
 	}
-	connCh := s.connected
+	readyCh := s.ready
 	s.pc = pc
 	s.mu.Unlock()
 
@@ -149,22 +169,14 @@ func (s *viewerSession) rebuild() error {
 		}
 		switch st {
 		case webrtc.PeerConnectionStateConnected:
-			// Log the actually-chosen ICE path so we can tell whether this
-			// session went direct (host/srflx) or through TURN (relay).
-			// Drives the "how many users actually need relay?" metric.
 			lt, rt, la, ra := peer.SelectedPath(pc)
 			s.log.Info("ice selected",
 				"epoch", epoch,
 				"local", lt, "remote", rt,
 				"local_addr", la, "remote_addr", ra)
-			select {
-			case <-connCh:
-			default:
-				close(connCh)
-			}
 		case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed, webrtc.PeerConnectionStateDisconnected:
 			// Disconnected is transient in pion; it may recover to Connected
-			// on its own within ~15s. We only rebuild on Failed/Closed.
+			// on its own within ~15s. Only rebuild on Failed/Closed.
 			if st == webrtc.PeerConnectionStateDisconnected {
 				return
 			}
@@ -173,11 +185,49 @@ func (s *viewerSession) rebuild() error {
 		}
 	})
 
-	// Bootstrap DC forces SCTP negotiation into the offer's SDP so that
-	// later on-demand DataChannels can ride the same association.
-	if _, err := pc.CreateDataChannel("bootstrap", nil); err != nil {
-		return fmt.Errorf("bootstrap dc: %w", err)
+	// Open the tunnel DC. SCTP m-section gets negotiated as a side effect,
+	// so we don't need a separate "bootstrap" DC anymore.
+	dc, err := pc.CreateDataChannel("tunnel", nil)
+	if err != nil {
+		return fmt.Errorf("create tunnel DC: %w", err)
 	}
+	dc.OnOpen(func() {
+		// Stale-epoch guard: by the time OnOpen fires the supervisor may
+		// have already torn this PC down (e.g. on a fast Failed→rebuild).
+		s.mu.Lock()
+		if s.epoch != epoch {
+			s.mu.Unlock()
+			return
+		}
+		s.mu.Unlock()
+
+		sess, err := tunnel.Dial(dc, s.myPriv, s.peerPub, s.log)
+		if err != nil {
+			s.log.Error("tunnel dial", "epoch", epoch, "err", err)
+			s.requestRebuild()
+			return
+		}
+
+		s.mu.Lock()
+		if s.epoch != epoch {
+			// Won the race against another rebuild; drop our session.
+			s.mu.Unlock()
+			_ = sess.Close()
+			return
+		}
+		s.mux = sess
+		s.mu.Unlock()
+		// Closing readyCh unblocks every proxy() goroutine waiting on it.
+		close(readyCh)
+
+		// Watchdog: when yamux dies (peer closed, secure conn EOF, etc.)
+		// rebuild on the same signaling channel.
+		go func() {
+			<-sess.CloseChan()
+			s.log.Warn("yamux session closed; rebuilding", "epoch", epoch)
+			s.requestRebuild()
+		}()
+	})
 
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
@@ -194,22 +244,22 @@ func (s *viewerSession) rebuild() error {
 
 // handleSignal applies an envelope to the current PC. Stale envelopes
 // (e.g. an ICE candidate from a prior epoch arriving after rebuild) are
-// handled at pion level — it will just reject them with a warning.
+// handled at pion level — it just rejects them with a warning.
 //
 // Mid-session "ready": the signaling server re-fires it whenever the
 // counterpart rejoins a room we're still in (owner restart, WS redial
-// after a flap, etc.). When that happens any SDP offer we'd already
-// sent was dropped into an empty room, so our current PC is stuck
-// waiting for an answer that will never arrive. Trigger a fresh
-// rebuild — the supervisor will tear down the stale PC and produce a
-// new offer on the healthy session.
+// after a flap). When that happens any SDP offer we'd already sent was
+// dropped into an empty room, so our current PC is stuck waiting for
+// an answer that will never arrive. Trigger a fresh rebuild.
 func (s *viewerSession) handleSignal(env signaling.Envelope) {
 	if env.Kind == "ready" {
 		s.log.Info("signaling re-ready; triggering peer rebuild")
 		s.requestRebuild()
 		return
 	}
-	pc, _ := s.snapshot()
+	s.mu.Lock()
+	pc := s.pc
+	s.mu.Unlock()
 	if pc == nil {
 		return
 	}
@@ -257,9 +307,6 @@ func main() {
 		log.Error("peer verification failed", "err", err)
 		os.Exit(1)
 	}
-	// Parse the owner's pubkey once — it is the fixed peer identity for
-	// every DC opened on every PC rebuild. We refuse to run without it:
-	// Noise_IK needs the responder's static key to authenticate.
 	if peerPubkeyB64 == "" {
 		log.Error("owner did not announce a pubkey; cannot establish Noise session")
 		os.Exit(1)
@@ -274,7 +321,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sess := newViewerSession(sig, log)
+	sess := newViewerSession(sig, log, id.Private, peerPub)
 	go sess.run(ctx)
 	go signalLoop(sess, sig, log)
 
@@ -295,7 +342,7 @@ func main() {
 				return
 			}
 			n := atomic.AddUint64(&counter, 1)
-			go proxy(sess, localConn, n, id.Private, peerPub, log)
+			go proxy(sess, localConn, n, log)
 		}
 	}()
 
@@ -305,70 +352,45 @@ func main() {
 	log.Info("shutting down")
 }
 
-// proxy waits for the current PC to be Connected, then opens a fresh DC
-// on it and shuttles bytes. If the PC is in the middle of rebuilding,
-// the local conn stalls (up to dcOpenTimeout) instead of receiving an
-// immediate EOF — that's what keeps Finder's WebDAV client alive across
-// ICE failures.
-func proxy(sess *viewerSession, local net.Conn, id uint64, myPriv ed25519.PrivateKey, peerPub ed25519.PublicKey, log *slog.Logger) {
+// proxy waits for the current tunnel mux to be ready, opens a yamux
+// stream, and shuttles bytes. If the tunnel is in the middle of
+// rebuilding the local conn stalls (up to tunnelReadyTimeout) instead
+// of EOFing immediately — that's what keeps Finder's WebDAV client
+// alive across PC rebuilds.
+func proxy(sess *viewerSession, local net.Conn, id uint64, log *slog.Logger) {
 	defer local.Close()
 
-	pc, connCh := sess.snapshot()
+	_, ready := sess.snapshotMux()
 	select {
-	case <-connCh:
-	case <-time.After(dcOpenTimeout):
-		log.Warn("pc not connected in time", "id", id)
+	case <-ready:
+	case <-time.After(tunnelReadyTimeout):
+		log.Warn("tunnel not ready in time", "id", id)
 		return
 	}
-	// Re-snapshot after wait: the PC we waited on may have been swapped.
-	pc, _ = sess.snapshot()
-	if pc == nil {
-		log.Warn("no pc available", "id", id)
+	mux, _ := sess.snapshotMux()
+	if mux == nil {
+		log.Warn("no mux available", "id", id)
 		return
 	}
 
-	label := fmt.Sprintf("req-%d", id)
-	dc, err := pc.CreateDataChannel(label, nil)
+	stream, err := mux.OpenStream()
 	if err != nil {
-		log.Warn("create dc", "id", id, "err", err)
+		log.Warn("open stream", "id", id, "err", err)
 		return
 	}
-
-	openCh := make(chan struct{}, 1)
-	dc.OnOpen(func() {
-		select {
-		case openCh <- struct{}{}:
-		default:
-		}
-	})
-
-	select {
-	case <-openCh:
-	case <-time.After(10 * time.Second):
-		log.Warn("dc open timeout", "id", id)
-		_ = dc.Close()
-		return
-	}
-
-	raw := peer.NewConn(dc)
-	// Noise_IK on top of the DC: binds the session to the TOFU-pinned
-	// owner pubkey. If a MITM swapped DTLS fingerprints at the signaling
-	// layer the handshake fails here and we bail out of this request.
-	remote, err := secure.Client(raw, myPriv, peerPub)
-	if err != nil {
-		log.Warn("noise handshake failed", "id", id, "err", err)
-		_ = raw.Close()
-		return
-	}
-	defer remote.Close()
+	defer stream.Close()
 
 	done := make(chan struct{}, 2)
 	go func() {
-		_, _ = io.Copy(remote, local)
+		_, _ = io.Copy(stream, local)
+		// Half-close the write side so the owner sees EOF and finishes
+		// flushing its response — same semantics http.Server expects on
+		// keep-alive idle.
+		_ = stream.Close()
 		done <- struct{}{}
 	}()
 	go func() {
-		_, _ = io.Copy(local, remote)
+		_, _ = io.Copy(local, stream)
 		done <- struct{}{}
 	}()
 	<-done
