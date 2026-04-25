@@ -30,12 +30,18 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Keepalive tuning. Short enough to free a stuck slot within a single
-// user's patience window (~15 s), long enough not to drown healthy
-// clients in ping traffic.
+// Keepalive tuning. Originally 25 s pong timeout matched ~2.5 × ping
+// interval — the textbook ratio. In practice we observed clients on
+// VPN / mobile / heavily-NATed networks losing one ping due to
+// transient TCP retransmits and getting kicked despite a perfectly
+// alive process on the other end. Each kick triggered a redial →
+// "ready" envelope on counterpart → forced PeerConnection rebuild,
+// which interrupts in-flight WebDAV transfers. 60 s is permissive
+// enough to ride out a 30-second NAT hiccup or an antivirus stall
+// while still closing genuinely dead sockets within a minute.
 const (
 	keepaliveInterval = 10 * time.Second
-	pongTimeout       = 25 * time.Second // ≈ 2.5 × interval
+	pongTimeout       = 60 * time.Second
 )
 
 var upgrader = websocket.Upgrader{
