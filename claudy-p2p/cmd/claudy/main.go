@@ -874,6 +874,39 @@ func mount(localAddr, room string, sp *subprocess) error {
 			_ = exec.Command("explorer", drive).Start()
 		}
 		return nil
+	case "linux":
+		// Prefer GVFS via gio: it's userspace (no sudo), present on every
+		// GNOME/KDE/Cinnamon desktop, and the resulting mount appears in
+		// Nautilus / Dolphin / Files exactly like a real shared folder.
+		// `mount.davfs` would be more universal but requires root and a
+		// passwd config; that's a non-starter for "double-click and it
+		// works" UX.
+		//
+		// gio puts the mount under /run/user/$UID/gvfs/dav:host=...,port=...
+		// which is what we hand back to the UI as the "mount path". Some
+		// minimal X / tiling-WM setups don't run a gvfs daemon — gio mount
+		// errors and we surface a hint to mount manually.
+		if _, err := exec.LookPath("gio"); err != nil {
+			return fmt.Errorf("gio not found; install glib-networking + gvfs-backends, " +
+				"or open http://" + localAddr + " in Files via 'Connect to Server'")
+		}
+		url := "dav://" + localAddr + "/"
+		out, err := exec.Command("gio", "mount", url).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("gio mount: %s: %w", strings.TrimSpace(string(out)), err)
+		}
+		// Construct the GVFS mount path. Format is stable across GVFS
+		// versions: dav:host=HOST,port=PORT (URL-encoded for `:` etc).
+		host, port, _ := strings.Cut(localAddr, ":")
+		uid := os.Getuid()
+		path := fmt.Sprintf("/run/user/%d/gvfs/dav:host=%s,port=%s", uid, host, port)
+		sp.mu.Lock()
+		sp.mountPath = path
+		sp.mu.Unlock()
+		sp.pushLogLine("mounted at " + path)
+		// Best-effort: open Files (xdg-open works on most desktops).
+		_ = exec.Command("xdg-open", path).Start()
+		return nil
 	}
 	return fmt.Errorf("automatic mount not supported on %s; open http://%s manually", runtime.GOOS, localAddr)
 }
@@ -934,16 +967,35 @@ func cleanStaleClaudyDrives() {
 }
 
 func unmountBin() string {
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		return "net"
+	case "linux":
+		return "gio"
 	}
 	return "umount"
 }
 
 func unmountArgs(mountPath string) []string {
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		// mountPath is a drive letter like "Z:"; net use /delete frees it.
 		return []string{"use", mountPath, "/delete", "/y"}
+	case "linux":
+		// We mounted via gio; reconstruct the dav:// URL from our recorded
+		// path. mountPath looks like /run/user/UID/gvfs/dav:host=H,port=P.
+		// `gio mount -u <path>` also works but the URL form is more
+		// resilient to future gvfs path-format tweaks.
+		const prefix = "dav:host="
+		if i := strings.Index(mountPath, prefix); i >= 0 {
+			rest := mountPath[i+len(prefix):]
+			host, port, ok := strings.Cut(rest, ",port=")
+			if ok {
+				return []string{"mount", "-u", "dav://" + host + ":" + port + "/"}
+			}
+		}
+		// Fall back to path-form unmount if parse failed.
+		return []string{"mount", "-u", mountPath}
 	}
 	return []string{mountPath}
 }
