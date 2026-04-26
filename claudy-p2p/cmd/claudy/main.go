@@ -431,21 +431,54 @@ func (a *appState) startConnect(room string) error {
 	a.connect = sp
 	a.mu.Unlock()
 
-	// Mount once the tunnel reports connected. We wait for "connected"
-	// (PC + Noise + yamux all up) rather than just the proxy listener,
-	// otherwise the first PROPFIND races the handshake and Finder times
-	// out the mount before bytes flow.
+	// Mount supervisor: keeps trying to mount whenever the tunnel
+	// becomes connected. Single-shot mount was fragile on flaky
+	// networks where ICE direct path connects briefly then fails —
+	// `net use` would launch against a dying proxy and hit System
+	// error 58 / 67. Loop here means the user just has to wait;
+	// once relay-escalation kicks in on the dav-client side the
+	// next "connected" gives us a working mount.
+	//
+	// We stop trying when (a) connect was stopped by the user, or
+	// (b) we successfully recorded a mountPath, or (c) total
+	// elapsed time exceeds 5 minutes (something is fundamentally
+	// wrong, no point spamming forever).
 	go func() {
-		ok := sp.waitForStatus(func(state string) bool {
-			return state == "connected" || state == "connected (via relay)"
-		}, 60*time.Second)
-		if !ok {
-			sp.pushLogLine("viewer never reached connected within 60s — mount skipped")
-			return
+		deadline := time.Now().Add(5 * time.Minute)
+		for time.Now().Before(deadline) {
+			a.mu.Lock()
+			alive := a.connect == sp
+			a.mu.Unlock()
+			if !alive {
+				return // stopConnect was called
+			}
+			ok := sp.waitForStatus(func(state string) bool {
+				return state == "connected" || state == "connected (via relay)"
+			}, 60*time.Second)
+			if !ok {
+				sp.pushLogLine("waiting for tunnel — still trying to mount")
+				continue
+			}
+			// Skip if already mounted by a prior successful attempt.
+			sp.mu.Lock()
+			already := sp.mountPath != ""
+			sp.mu.Unlock()
+			if already {
+				return
+			}
+			if err := mount(localAddr, room, sp); err != nil {
+				sp.pushLogLine("mount attempt failed: " + err.Error() + " — will retry on next reconnect")
+				// Wait until tunnel transitions away from connected
+				// before re-attempting; otherwise we'd hammer mount
+				// against the same broken state.
+				_ = sp.waitForStatus(func(state string) bool {
+					return state != "connected" && state != "connected (via relay)"
+				}, 30*time.Second)
+				continue
+			}
+			return // success
 		}
-		if err := mount(localAddr, room, sp); err != nil {
-			sp.pushLogLine("mount failed: " + err.Error())
-		}
+		sp.pushLogLine("mount supervisor giving up after 5 minutes")
 	}()
 	return nil
 }

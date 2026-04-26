@@ -62,6 +62,12 @@ type viewerSession struct {
 
 	rebuildCh chan struct{}
 
+	// relayOnly latches when an earlier epoch reached state=Failed —
+	// signal that direct ICE paths on this network are unstable, so
+	// future rebuilds gather only relay candidates and let TURN carry
+	// the session. Never flips back to false within a session.
+	relayOnly atomic.Bool
+
 	mu    sync.Mutex
 	pc    *webrtc.PeerConnection
 	mux   *yamux.Session
@@ -140,7 +146,7 @@ func (s *viewerSession) rebuild(ctx context.Context) error {
 		s.pc = nil
 	}
 
-	pc, err := peer.New(s.sig)
+	pc, err := peer.NewWithPolicy(s.sig, s.relayOnly.Load())
 	if err != nil {
 		s.mu.Unlock()
 		return fmt.Errorf("new peer: %w", err)
@@ -179,6 +185,15 @@ func (s *viewerSession) rebuild(ctx context.Context) error {
 			// on its own within ~15s. Only rebuild on Failed/Closed.
 			if st == webrtc.PeerConnectionStateDisconnected {
 				return
+			}
+			// On Failed: latch relay-only mode for the rest of the session.
+			// Reaching Connected and then Failed within seconds is the
+			// signature of a direct path between two asymmetric NATs (or
+			// two different VPN exits) where consent-freshness probes
+			// drop after a few exchanges. TURN carries the session
+			// reliably in that case; subsequent rebuilds will pick it.
+			if st == webrtc.PeerConnectionStateFailed && s.relayOnly.CompareAndSwap(false, true) {
+				s.log.Warn("ICE failed on direct path; escalating to relay-only for next epoch", "epoch", epoch)
 			}
 			s.log.Warn("peer connection terminal; rebuilding", "epoch", epoch, "state", st.String())
 			s.requestRebuild()

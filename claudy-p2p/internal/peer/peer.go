@@ -71,7 +71,22 @@ const (
 // New builds a PeerConnection wired to forward local ICE candidates through
 // sig as soon as they are gathered.
 func New(sig *signaling.Client) (*webrtc.PeerConnection, error) {
+	return NewWithPolicy(sig, false)
+}
+
+// NewWithPolicy is like New but lets the caller force
+// ICETransportPolicy=Relay. Used by the supervisor when an earlier
+// epoch on the same session reached state=Failed despite ICE
+// negotiation succeeding briefly — that's the textbook signature of
+// a path between two asymmetric NATs (or two different VPN exits)
+// where consent-freshness probes drop within seconds. Re-gathering
+// with relay-only forces both sides through TURN where reachability
+// is symmetric and stable.
+func NewWithPolicy(sig *signaling.Client, relayOnly bool) (*webrtc.PeerConnection, error) {
 	cfg := webrtc.Configuration{ICEServers: DefaultICEServers()}
+	if relayOnly {
+		cfg.ICETransportPolicy = webrtc.ICETransportPolicyRelay
+	}
 	pc, err := webrtc.NewPeerConnection(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("new peer connection: %w", err)

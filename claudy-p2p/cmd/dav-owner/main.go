@@ -23,6 +23,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -96,6 +97,13 @@ type ownerSession struct {
 
 	rebuild chan struct{}
 
+	// relayOnly latches when an earlier epoch reached state=Failed —
+	// see the symmetric note in dav-client/viewerSession. Both sides
+	// detect failure independently; whichever sees it first escalates
+	// its own rebuild path, and the next SDP exchange is relay-only
+	// from at least one side, which forces TURN selection.
+	relayOnly atomic.Bool
+
 	mu    sync.Mutex
 	pc    *webrtc.PeerConnection
 	mux   *yamux.Session
@@ -165,7 +173,7 @@ func (s *ownerSession) buildPC() error {
 		s.pc = nil
 	}
 
-	pc, err := peer.New(s.sig)
+	pc, err := peer.NewWithPolicy(s.sig, s.relayOnly.Load())
 	if err != nil {
 		s.mu.Unlock()
 		return fmt.Errorf("new peer: %w", err)
@@ -191,6 +199,9 @@ func (s *ownerSession) buildPC() error {
 				"local", lt, "remote", rt,
 				"local_addr", la, "remote_addr", ra)
 		case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed:
+			if st == webrtc.PeerConnectionStateFailed && s.relayOnly.CompareAndSwap(false, true) {
+				s.log.Warn("ICE failed on direct path; escalating to relay-only for next epoch", "epoch", epoch)
+			}
 			s.log.Warn("peer connection terminal; rebuilding", "epoch", epoch, "state", st.String())
 			s.requestRebuild()
 		}
