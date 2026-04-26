@@ -39,22 +39,33 @@ import (
 // WebRTC stacks is safest under 16KB.
 const maxMsgSize = 16 * 1024
 
-// Flow-control watermarks. Chosen empirically:
+// Flow-control watermarks. Bumped from 1 MiB / 256 KiB after WAN testing.
 //
-//   - highWaterMark (1 MiB): when BufferedAmount exceeds this, Write blocks
-//     until pion has drained enough to fire OnBufferedAmountLow. One MiB
-//     is ~80 ms of 100 Mbit link — big enough to keep the SCTP pipeline
-//     full, small enough that other DCs on the same PC don't starve.
-//   - lowWaterMark (256 KiB): the threshold passed to pion. When the
-//     outbound buffer drops below this, pion fires our callback and the
-//     waiting Write resumes. The high/low gap (~750 KiB) gives hysteresis
-//     so we aren't toggling on every Send.
+// Why the change: at 1 MiB highWaterMark, throughput is window-limited
+// to ~ 1 MiB / RTT per tunnel. On a TURN relay leg (RTT ~150 ms) that
+// caps the entire session at ~7 MB/s regardless of how many yamux
+// streams ride it — peer.Conn is the bottleneck below yamux. Bumping
+// the high water mark to 8 MiB lifts that ceiling to ~50 MB/s on the
+// same path; on srflx (~50 ms RTT) we go from ~20 MB/s to ~160 MB/s.
 //
-// If we ever see large files take much longer than the underlying link
-// capacity, these are the knobs to tune.
+//   - highWaterMark (8 MiB): when BufferedAmount exceeds this, Write
+//     blocks until pion's OnBufferedAmountLow fires. Bigger than the
+//     SCTP send queue we expect any single PUT to keep buzzing, small
+//     enough that the head-of-line blocking on this DC stays under
+//     ~2 s on a slow uplink (≈ 5 MB/s × 8 MiB = 1.6 s worst-case
+//     latency for a control message queued behind a body burst).
+//   - lowWaterMark (2 MiB): pion fires the resume callback when the
+//     outbound buffer drops below this. Hysteresis gap of 6 MiB keeps
+//     us in long write-resume cycles instead of flipping on every
+//     Send, which is what kept the visible throughput pulsating to 0.
+//
+// Memory cost: each tunnel can hold up to highWaterMark bytes in pion's
+// outbound queue plus the same in our incoming `in` buffer (16 MiB
+// already). One additional 8 MiB worst case per tunnel × number of
+// active sessions. Acceptable on any laptop made in the last decade.
 const (
-	highWaterMark = 1 * 1024 * 1024
-	lowWaterMark  = 256 * 1024
+	highWaterMark = 8 * 1024 * 1024
+	lowWaterMark  = 2 * 1024 * 1024
 )
 
 // fakeAddr implements net.Addr for Local/RemoteAddr — WebDAV/http.Server
