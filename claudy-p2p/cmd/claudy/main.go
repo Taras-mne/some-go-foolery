@@ -93,6 +93,17 @@ type Status struct {
 	Connect *ConnectInfo `json:"connect,omitempty"`
 }
 
+// allLogs returns the full ring buffer (up to ~200 lines) under the
+// lock. Used by /api/logs for the "copy everything" tester button —
+// snapshot only hands out the trailing 30 lines that fit in the UI.
+func (s *subprocess) allLogs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, len(s.logLines))
+	copy(out, s.logLines)
+	return out
+}
+
 // snapshot copies the subprocess state under the lock, returning a
 // JSON-friendly view.
 func (s *subprocess) snapshot() (state string, uptimeSecs int, logs []string, mountPath string) {
@@ -486,6 +497,50 @@ func (a *appState) httpHandlers() http.Handler {
 
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, a.snapshot())
+	})
+
+	// /api/logs returns a plain-text dump of every subprocess's full
+	// ring buffer — the "I'm a beta tester, here's a paste" button.
+	// Includes both connect and all share slots, separated by headers.
+	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		var b strings.Builder
+		fmt.Fprintf(&b, "Claudy log dump — %s\nOS: %s/%s\n\n",
+			time.Now().Format(time.RFC3339), runtime.GOOS, runtime.GOARCH)
+
+		a.mu.Lock()
+		connect := a.connect
+		dir := a.shareDir
+		slots := make([]*subprocess, 0, len(a.slots))
+		for _, sp := range a.slots {
+			slots = append(slots, sp)
+		}
+		a.mu.Unlock()
+
+		if connect != nil {
+			fmt.Fprintf(&b, "=== Connect (room: %s) ===\n", connect.room)
+			for _, line := range connect.allLogs() {
+				b.WriteString(line)
+				b.WriteByte('\n')
+			}
+			b.WriteByte('\n')
+		}
+		if dir != "" || len(slots) > 0 {
+			fmt.Fprintf(&b, "=== Share — folder: %s ===\n\n", dir)
+			for _, sp := range slots {
+				fmt.Fprintf(&b, "--- slot room: %s ---\n", sp.room)
+				for _, line := range sp.allLogs() {
+					b.WriteString(line)
+					b.WriteByte('\n')
+				}
+				b.WriteByte('\n')
+			}
+		}
+		if connect == nil && len(slots) == 0 {
+			b.WriteString("(no active sessions)\n")
+		}
+		_, _ = w.Write([]byte(b.String()))
 	})
 
 	mux.HandleFunc("/api/pick-dir", func(w http.ResponseWriter, r *http.Request) {

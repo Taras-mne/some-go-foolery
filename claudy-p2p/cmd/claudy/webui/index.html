@@ -151,6 +151,17 @@
   details { margin-top: 14px; }
   details summary { cursor: pointer; color: var(--text-dim); font-size: 12px; padding: 6px 0; }
   details summary:hover { color: var(--text); }
+  /* Tester convenience: copy-all-logs button shown next to each
+     diagnostics block. Inline, low-emphasis until clicked. */
+  .copy-logs {
+    display: inline-block; margin-left: 12px;
+    font-size: 11px; color: var(--text-dim);
+    background: none; border: 1px solid var(--border);
+    border-radius: 6px; padding: 3px 10px;
+    cursor: pointer;
+  }
+  .copy-logs:hover { color: var(--text); border-color: var(--accent); }
+  .copy-logs.copied { color: var(--good); border-color: var(--good); }
 </style>
 </head>
 <body>
@@ -204,7 +215,7 @@
     </div>
 
     <details>
-      <summary>Diagnostics</summary>
+      <summary>Diagnostics<button class="copy-logs" onclick="event.preventDefault();copyAllLogs(this)">📋 Copy all logs</button></summary>
       <div class="logs" id="share-logs"></div>
     </details>
   </div>
@@ -245,7 +256,7 @@
       </div>
     </div>
     <details>
-      <summary>Diagnostics</summary>
+      <summary>Diagnostics<button class="copy-logs" onclick="event.preventDefault();copyAllLogs(this)">📋 Copy all logs</button></summary>
       <div class="logs" id="connect-logs"></div>
     </details>
   </div>
@@ -430,6 +441,68 @@ function renderConnect(c) {
 
 function escapeHTML(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// Tester clipboard helper. Two key things this gets right:
+//
+//   1. Pre-fetch the log dump into a cache that refreshes in the
+//      background every 3 s. The click handler is then synchronous
+//      and copies straight from memory — no `await` between the
+//      user gesture and the clipboard call. This matters because
+//      Brave / strict-Chrome treat post-await writeText calls as
+//      "no user activation" and reject with a permission error
+//      ("request is not allowed by the user agent…").
+//   2. Fall back to a temporary <textarea> + execCommand when
+//      navigator.clipboard isn't usable (denied permission, http
+//      context, old browser). execCommand is deprecated but is the
+//      only thing that ALWAYS works inside a click handler.
+let cachedFullLogs = '(opening logs… give it a second)';
+async function refreshFullLogs() {
+  try {
+    const r = await fetch('/api/logs');
+    if (r.ok) cachedFullLogs = await r.text();
+  } catch (_) { /* leave previous cache */ }
+}
+setInterval(refreshFullLogs, 3000);
+refreshFullLogs();
+
+function copyAllLogs(btn) {
+  const text = cachedFullLogs;
+  let ok = false;
+
+  // Path 1: textarea + execCommand. Synchronous, in-gesture, works
+  // even when navigator.clipboard isn't available or permission was
+  // denied. We try this first because it's the most universally
+  // accepted path for a freshly-installed Brave/Chrome.
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.top = '0'; ta.style.left = '0';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+  } catch (_) { ok = false; }
+
+  // Path 2: navigator.clipboard.writeText. Only attempted if path 1
+  // failed (older browsers strip execCommand). Fire-and-forget — we
+  // optimistically claim success; if the promise rejects later the
+  // worst case is the user sees "Copied" but has empty clipboard.
+  if (!ok && navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).catch(() => {});
+    ok = true;
+  }
+
+  if (ok) {
+    btn.textContent = '✓ Copied to clipboard';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '📋 Copy all logs'; btn.classList.remove('copied'); }, 1500);
+  } else {
+    btn.textContent = '⚠ Auto-copy blocked — right-click logs panel → Copy';
+    setTimeout(() => { btn.textContent = '📋 Copy all logs'; }, 3000);
+  }
 }
 
 async function tick() {
