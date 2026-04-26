@@ -198,6 +198,9 @@ func TestConn_CloseUnblocksRead(t *testing.T) {
 }
 
 func TestConn_BackpressureBoundsBufferedAmount(t *testing.T) {
+	t.Skip("app-level high-water gate disabled (see internal/peer/conn.go); " +
+		"backpressure is now yamux's per-stream window. Re-enable this test " +
+		"if the gate is restored.")
 	// Regression test for the 500 MB .mov symptom: without BufferedAmount
 	// watermarking, pion's outbound SCTP buffer can grow unbounded when
 	// a writer is faster than the wire, starving other DCs. We assert

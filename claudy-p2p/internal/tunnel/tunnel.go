@@ -53,7 +53,7 @@ func yamuxConfig() *yamux.Config {
 	cfg := yamux.DefaultConfig()
 	cfg.LogOutput = io.Discard
 	cfg.KeepAliveInterval = 30 * time.Second
-	cfg.MaxStreamWindowSize = 8 * 1024 * 1024
+	cfg.MaxStreamWindowSize = 1 * 1024 * 1024
 	return cfg
 }
 

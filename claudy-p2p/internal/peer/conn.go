@@ -39,33 +39,28 @@ import (
 // WebRTC stacks is safest under 16KB.
 const maxMsgSize = 16 * 1024
 
-// Flow-control watermarks. Bumped from 1 MiB / 256 KiB after WAN testing.
+// Flow-control watermarks. Chosen empirically:
 //
-// Why the change: at 1 MiB highWaterMark, throughput is window-limited
-// to ~ 1 MiB / RTT per tunnel. On a TURN relay leg (RTT ~150 ms) that
-// caps the entire session at ~7 MB/s regardless of how many yamux
-// streams ride it — peer.Conn is the bottleneck below yamux. Bumping
-// the high water mark to 8 MiB lifts that ceiling to ~50 MB/s on the
-// same path; on srflx (~50 ms RTT) we go from ~20 MB/s to ~160 MB/s.
+//   - highWaterMark (1 MiB): when BufferedAmount exceeds this, Write blocks
+//     until pion has drained enough to fire OnBufferedAmountLow. One MiB
+//     is ~80 ms of 100 Mbit link — big enough to keep the SCTP pipeline
+//     full, small enough that other DCs on the same PC don't starve.
+//   - lowWaterMark (256 KiB): the threshold passed to pion. When the
+//     outbound buffer drops below this, pion fires our callback and the
+//     waiting Write resumes. The high/low gap (~750 KiB) gives hysteresis
+//     so we aren't toggling on every Send.
 //
-//   - highWaterMark (8 MiB): when BufferedAmount exceeds this, Write
-//     blocks until pion's OnBufferedAmountLow fires. Bigger than the
-//     SCTP send queue we expect any single PUT to keep buzzing, small
-//     enough that the head-of-line blocking on this DC stays under
-//     ~2 s on a slow uplink (≈ 5 MB/s × 8 MiB = 1.6 s worst-case
-//     latency for a control message queued behind a body burst).
-//   - lowWaterMark (2 MiB): pion fires the resume callback when the
-//     outbound buffer drops below this. Hysteresis gap of 6 MiB keeps
-//     us in long write-resume cycles instead of flipping on every
-//     Send, which is what kept the visible throughput pulsating to 0.
-//
-// Memory cost: each tunnel can hold up to highWaterMark bytes in pion's
-// outbound queue plus the same in our incoming `in` buffer (16 MiB
-// already). One additional 8 MiB worst case per tunnel × number of
-// active sessions. Acceptable on any laptop made in the last decade.
+// Tried bumping these to 8 MiB / 2 MiB to lift WAN throughput ceiling.
+// The longer hysteresis gap (6 MiB vs 768 KiB) made parking periods
+// last ~1 s instead of ~150 ms, so even though peak burst rate was
+// higher the visible throughput stayed lower — pion's own SCTP rwnd
+// stays at ~1 MiB regardless of our app-level high water mark, so
+// extra buffer just sat in heap without delivering more bytes to the
+// wire. Reverted; deeper fix is to remove app-level backpressure
+// entirely and let pion's SCTP layer be the only flow-control gate.
 const (
-	highWaterMark = 8 * 1024 * 1024
-	lowWaterMark  = 2 * 1024 * 1024
+	highWaterMark = 1 * 1024 * 1024
+	lowWaterMark  = 256 * 1024
 )
 
 // fakeAddr implements net.Addr for Local/RemoteAddr — WebDAV/http.Server
@@ -218,21 +213,29 @@ func (c *Conn) Write(p []byte) (int, error) {
 		default:
 		}
 
-		// Backpressure: if pion's outbound buffer is already high, wait
-		// for it to drain. Re-check in a loop because OnBufferedAmountLow
-		// may fire while we still have pending Sends to issue — each
-		// Send bumps the buffer, so we might trip the high water mark
-		// again within the same Write call.
-		for c.dc.BufferedAmount() > highWaterMark {
-			select {
-			case <-c.bufLow:
-				// draining observed; loop re-checks BufferedAmount
-			case <-c.ctx.Done():
-				return total, io.ErrClosedPipe
-			case <-deadlineCh:
-				return total, os.ErrDeadlineExceeded
-			}
-		}
+		// App-level high-water gate disabled (experiment). Yamux's
+		// per-stream MaxStreamWindowSize already bounds total in-flight
+		// bytes to ~window × stream-count (e.g. 1 MiB × 8 streams ≈
+		// 8 MiB), which is the only memory we'd care about if pion
+		// queued unbounded. Letting Send through without our app-level
+		// park eliminates the burst-pause-burst hysteresis that kept
+		// Explorer's UI showing "0 byte/s" for 1+ second at a time.
+		// bufLow signal still fires (we keep SetBufferedAmountLowThreshold
+		// below for debugging) but the gate is no-op.
+		//
+		// Restore by un-commenting the loop below if pion's outgoing
+		// queue ever shows unbounded growth in pprof.
+		//
+		// for c.dc.BufferedAmount() > highWaterMark {
+		// 	select {
+		// 	case <-c.bufLow:
+		// 	case <-c.ctx.Done():
+		// 		return total, io.ErrClosedPipe
+		// 	case <-deadlineCh:
+		// 		return total, os.ErrDeadlineExceeded
+		// 	}
+		// }
+		_ = highWaterMark // keep constant referenced for the disabled path above
 
 		chunk := p
 		if len(chunk) > maxMsgSize {
