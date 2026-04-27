@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -62,11 +63,26 @@ type viewerSession struct {
 
 	rebuildCh chan struct{}
 
-	// relayOnly latches when an earlier epoch reached state=Failed —
-	// signal that direct ICE paths on this network are unstable, so
-	// future rebuilds gather only relay candidates and let TURN carry
-	// the session. Never flips back to false within a session.
+	// relayOnly forces ICE relay-only on subsequent rebuilds. Set by
+	// the -force-relay flag at startup, by the auto-escalation logic
+	// in OnConnectionStateChange after >=2 consecutive non-race
+	// Failed events, or by tunnel.Dial errors that look like
+	// asymmetric-NAT signatures.
 	relayOnly atomic.Bool
+
+	// consecutiveFails is the number of state=Failed transitions
+	// observed since the last successful Connected. Filters one-off
+	// failures (SDP race, transient signal flap) from real network
+	// problems. Reset to 0 on every Connected. Guarded by mu.
+	consecutiveFails int
+
+	// lastSDPRaceUnixNano is set when ApplyRemote on the current PC
+	// returns "InvalidModificationError" (stale answer / ICE
+	// candidate from a prior epoch arriving after rebuild). If a
+	// Failed fires within a few seconds of that, we classify the
+	// failure as race-induced rather than a real ICE breakdown and
+	// neither escalate to relay nor count it toward consecutiveFails.
+	lastSDPRaceUnixNano atomic.Int64
 
 	mu    sync.Mutex
 	pc    *webrtc.PeerConnection
@@ -99,6 +115,54 @@ func (s *viewerSession) requestRebuild() {
 	select {
 	case s.rebuildCh <- struct{}{}:
 	default: // already pending
+	}
+}
+
+// sdpRaceWindow is how long after an "InvalidModificationError" from
+// ApplyRemote we keep treating any subsequent Failed as race-induced
+// rather than network-induced. 10 s comfortably covers pion's 30 s
+// ICE timeout starting from a fresh epoch — we want to catch the
+// case where the race answer arrived early in the new epoch and
+// poisoned ICE checks until they timed out.
+const sdpRaceWindow = 30 * time.Second
+
+// classifyAndMaybeEscalate decides whether a Failed transition counts
+// as evidence the direct path is broken (→ escalate to relay) or as
+// a transient signaling glitch (→ ignore, just rebuild).
+//
+// Two filters in front of the latch:
+//
+//  1. SDPRace — a recent ApplyRemote returned InvalidModificationError
+//     because a stale envelope from the previous epoch arrived after
+//     we'd already rebuilt. The new PC then 30-s-times-out into
+//     Failed not because the network is bad but because we never
+//     finished SDP exchange. Don't punish direct.
+//
+//  2. ConsecutiveFails counter — direct path can have one bad day
+//     (transient ISP routing flap) and still be the right choice
+//     long-term. Require 2 Failed in a row with no Connected between
+//     them before we conclude the path is genuinely broken. Reset
+//     happens in the Connected case above.
+func (s *viewerSession) classifyAndMaybeEscalate(epoch uint64) {
+	if raceTs := s.lastSDPRaceUnixNano.Load(); raceTs > 0 {
+		if time.Since(time.Unix(0, raceTs)) < sdpRaceWindow {
+			s.log.Info("Failed within SDP-race window; not escalating",
+				"epoch", epoch, "race_age_ms", time.Since(time.Unix(0, raceTs)).Milliseconds())
+			return
+		}
+	}
+	s.mu.Lock()
+	s.consecutiveFails++
+	fails := s.consecutiveFails
+	s.mu.Unlock()
+	if fails < 2 {
+		s.log.Info("Failed once on direct path; will retry direct before escalating",
+			"epoch", epoch, "consecutive_fails", fails)
+		return
+	}
+	if s.relayOnly.CompareAndSwap(false, true) {
+		s.log.Warn("ICE failed twice consecutively on direct path; escalating to relay-only",
+			"epoch", epoch, "consecutive_fails", fails)
 	}
 }
 
@@ -180,20 +244,20 @@ func (s *viewerSession) rebuild(ctx context.Context) error {
 				"epoch", epoch,
 				"local", lt, "remote", rt,
 				"local_addr", la, "remote_addr", ra)
+			// A real, working connection clears the failure counter.
+			// Anything we count below this point is consecutive with
+			// no successful session in between.
+			s.mu.Lock()
+			s.consecutiveFails = 0
+			s.mu.Unlock()
 		case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed, webrtc.PeerConnectionStateDisconnected:
 			// Disconnected is transient in pion; it may recover to Connected
 			// on its own within ~15s. Only rebuild on Failed/Closed.
 			if st == webrtc.PeerConnectionStateDisconnected {
 				return
 			}
-			// On Failed: latch relay-only mode for the rest of the session.
-			// Reaching Connected and then Failed within seconds is the
-			// signature of a direct path between two asymmetric NATs (or
-			// two different VPN exits) where consent-freshness probes
-			// drop after a few exchanges. TURN carries the session
-			// reliably in that case; subsequent rebuilds will pick it.
-			if st == webrtc.PeerConnectionStateFailed && s.relayOnly.CompareAndSwap(false, true) {
-				s.log.Warn("ICE failed on direct path; escalating to relay-only for next epoch", "epoch", epoch)
+			if st == webrtc.PeerConnectionStateFailed {
+				s.classifyAndMaybeEscalate(epoch)
 			}
 			s.log.Warn("peer connection terminal; rebuilding", "epoch", epoch, "state", st.String())
 			s.requestRebuild()
@@ -280,6 +344,14 @@ func (s *viewerSession) handleSignal(env signaling.Envelope) {
 	}
 	if _, err := peer.ApplyRemote(pc, env); err != nil {
 		s.log.Warn("apply remote", "err", err)
+		// Record the race-flavour error so the failure classifier can
+		// distinguish race-induced Failed transitions from genuine
+		// network breakdowns. Any "stable -> SetRemote" / Invalid-
+		// ModificationError is a stale envelope from the prior epoch.
+		if msg := err.Error(); strings.Contains(msg, "InvalidModification") ||
+			strings.Contains(msg, "stable->SetRemote") {
+			s.lastSDPRaceUnixNano.Store(time.Now().UnixNano())
+		}
 	}
 }
 

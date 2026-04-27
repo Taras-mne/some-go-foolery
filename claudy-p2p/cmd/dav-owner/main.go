@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -97,12 +98,17 @@ type ownerSession struct {
 
 	rebuild chan struct{}
 
-	// relayOnly latches when an earlier epoch reached state=Failed —
-	// see the symmetric note in dav-client/viewerSession. Both sides
-	// detect failure independently; whichever sees it first escalates
-	// its own rebuild path, and the next SDP exchange is relay-only
-	// from at least one side, which forces TURN selection.
-	relayOnly atomic.Bool
+	// Failure classification mirror of viewerSession. Same semantics:
+	// relayOnly is the policy bit, consecutiveFails counts Failed
+	// transitions since last Connected (reset to 0 on Connected),
+	// lastSDPRaceUnixNano records when ApplyRemote returned
+	// InvalidModificationError so the classifier can distinguish
+	// race-induced Failed from network failure. See the
+	// classifyAndMaybeEscalate doc comment in dav-client/main.go for
+	// the full rationale.
+	relayOnly           atomic.Bool
+	consecutiveFails    int // guarded by mu
+	lastSDPRaceUnixNano atomic.Int64
 
 	mu    sync.Mutex
 	pc    *webrtc.PeerConnection
@@ -125,6 +131,41 @@ func (s *ownerSession) requestRebuild() {
 	select {
 	case s.rebuild <- struct{}{}:
 	default:
+	}
+}
+
+// sdpRaceWindow mirrors the constant of the same name in dav-client.
+// Kept duplicated rather than shared because the two cmd packages
+// don't import each other and the value is genuinely a per-side
+// tuning parameter — a future change might want them different.
+const sdpRaceWindow = 30 * time.Second
+
+// classifyAndMaybeEscalate is the symmetric twin of the function in
+// dav-client/main.go. See that file for the full rationale; in short:
+// don't latch relay-only on the first Failed if (a) it followed an
+// "InvalidModificationError" within sdpRaceWindow (it's just a stale
+// envelope from the old epoch), or (b) it hasn't happened twice in
+// a row without a successful Connected in between.
+func (s *ownerSession) classifyAndMaybeEscalate(epoch uint64) {
+	if raceTs := s.lastSDPRaceUnixNano.Load(); raceTs > 0 {
+		if time.Since(time.Unix(0, raceTs)) < sdpRaceWindow {
+			s.log.Info("Failed within SDP-race window; not escalating",
+				"epoch", epoch, "race_age_ms", time.Since(time.Unix(0, raceTs)).Milliseconds())
+			return
+		}
+	}
+	s.mu.Lock()
+	s.consecutiveFails++
+	fails := s.consecutiveFails
+	s.mu.Unlock()
+	if fails < 2 {
+		s.log.Info("Failed once on direct path; will retry direct before escalating",
+			"epoch", epoch, "consecutive_fails", fails)
+		return
+	}
+	if s.relayOnly.CompareAndSwap(false, true) {
+		s.log.Warn("ICE failed twice consecutively on direct path; escalating to relay-only",
+			"epoch", epoch, "consecutive_fails", fails)
 	}
 }
 
@@ -198,9 +239,12 @@ func (s *ownerSession) buildPC() error {
 				"epoch", epoch,
 				"local", lt, "remote", rt,
 				"local_addr", la, "remote_addr", ra)
+			s.mu.Lock()
+			s.consecutiveFails = 0
+			s.mu.Unlock()
 		case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed:
-			if st == webrtc.PeerConnectionStateFailed && s.relayOnly.CompareAndSwap(false, true) {
-				s.log.Warn("ICE failed on direct path; escalating to relay-only for next epoch", "epoch", epoch)
+			if st == webrtc.PeerConnectionStateFailed {
+				s.classifyAndMaybeEscalate(epoch)
 			}
 			s.log.Warn("peer connection terminal; rebuilding", "epoch", epoch, "state", st.String())
 			s.requestRebuild()
@@ -293,6 +337,13 @@ func (s *ownerSession) handleSignal(env signaling.Envelope) {
 	consumed, err := peer.ApplyRemote(pc, env)
 	if err != nil {
 		s.log.Warn("apply remote", "err", err)
+		// Mark race-flavour errors so the failure classifier can
+		// distinguish race-induced Failed from genuine network
+		// breakdown. See dav-client side for full rationale.
+		if msg := err.Error(); strings.Contains(msg, "InvalidModification") ||
+			strings.Contains(msg, "stable->SetRemote") {
+			s.lastSDPRaceUnixNano.Store(time.Now().UnixNano())
+		}
 		return
 	}
 	if consumed && env.Kind == "sdp" {
