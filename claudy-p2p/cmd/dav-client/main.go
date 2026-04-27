@@ -289,6 +289,7 @@ func main() {
 	local := flag.String("local", "127.0.0.1:8910", "local HTTP listen address")
 	identityDir := flag.String("identity", defaultIdentityDir(), "identity + keyring directory")
 	peerAlias := flag.String("peer-alias", "", "pin owner under this alias in keyring (TOFU). If empty, TOFU is disabled.")
+	forceRelay := flag.Bool("force-relay", false, "force ICE relay-only (TURN). For diagnostic A/B between direct and relayed transport — leaves auto-escalation on Failed disabled by short-circuiting the gate.")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -337,6 +338,10 @@ func main() {
 	defer cancel()
 
 	sess := newViewerSession(sig, log, id.Private, peerPub)
+	if *forceRelay {
+		sess.relayOnly.Store(true)
+		log.Info("force-relay enabled; ICE will gather TURN candidates only")
+	}
 	go sess.run(ctx)
 	go signalLoop(sess, sig, log)
 
