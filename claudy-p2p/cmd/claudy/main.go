@@ -728,6 +728,102 @@ func (a *appState) httpHandlers() http.Handler {
 		writeJSON(w, a.snapshot())
 	})
 
+	// File browser endpoints. All operate on the connect-side mount —
+	// `path` query parameter is the absolute path inside the friend's
+	// shared folder (with leading slash).
+	mux.HandleFunc("/api/files", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			list, err := a.listFiles(r.URL.Query().Get("path"))
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			writeJSON(w, list)
+		case http.MethodDelete:
+			if err := a.rm(r.URL.Query().Get("path")); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "GET or DELETE", http.StatusMethodNotAllowed)
+		}
+	})
+	mux.HandleFunc("/api/files/get", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET required", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := a.downloadFile(w, r.URL.Query().Get("path")); err != nil {
+			// Header may already be written — log and bail.
+			a.log.Warn("download failed", "err", err)
+		}
+	})
+	mux.HandleFunc("/api/files/upload", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		// Multipart limit set high so a 5 GB upload streams instead of
+		// buffering. ParseMultipartForm with a low limit forces the
+		// rest into a tempfile; we don't want that — we stream the
+		// part body straight into the PUT.
+		mr, err := r.MultipartReader()
+		if err != nil {
+			http.Error(w, "expected multipart/form-data: "+err.Error(), 400)
+			return
+		}
+		dir := r.URL.Query().Get("path")
+		if dir == "" {
+			dir = "/"
+		}
+		if !strings.HasSuffix(dir, "/") {
+			dir += "/"
+		}
+		uploaded := 0
+		for {
+			part, err := mr.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			if part.FormName() != "file" {
+				_, _ = io.Copy(io.Discard, part)
+				continue
+			}
+			filename := part.FileName()
+			if filename == "" {
+				continue
+			}
+			// Don't trust client-supplied path components — strip any.
+			filename = filepath.Base(filename)
+			target := dir + filename
+			// Content-Length for individual part isn't reliably set;
+			// pass -1 so the PUT uses chunked encoding.
+			if err := a.uploadFile(target, part, -1); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			uploaded++
+		}
+		writeJSON(w, map[string]int{"uploaded": uploaded})
+	})
+	mux.HandleFunc("/api/files/mkdir", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := a.mkdir(r.URL.Query().Get("path")); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
 	return mux
 }
 
