@@ -148,6 +148,18 @@
     background: rgba(232,71,74,0.1); border: 1px solid var(--accent); border-radius: 8px;
     color: var(--accent); font-size: 13px;
   }
+  /* Diagnostic toggle row at the bottom of the home screen. Visible
+     but unobtrusive — testers care, normal users can ignore. */
+  .toggle-row {
+    display: flex; align-items: center; gap: 10px;
+    margin-top: 18px; padding: 10px 12px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    font-size: 12px; color: var(--text-dim);
+  }
+  .toggle-row input[type=checkbox] { margin: 0; cursor: pointer; }
+  .toggle-row label { cursor: pointer; flex: 1; }
+  .toggle-row .hint { font-size: 11px; color: var(--text-dim); margin-top: 2px; display: block; }
+
   details { margin-top: 14px; }
   details summary { cursor: pointer; color: var(--text-dim); font-size: 12px; padding: 6px 0; }
   details summary:hover { color: var(--text); }
@@ -179,6 +191,14 @@
       <span class="emoji">🔗</span><span class="label">Connect to a shared folder</span>
       <span class="desc">Paste a code from someone sharing a folder with you.</span>
     </button>
+
+    <div class="toggle-row">
+      <input type="checkbox" id="force-relay" onchange="setForceRelay(this.checked)">
+      <label for="force-relay">
+        Force relay (testing)
+        <span class="hint">Routes traffic through TURN server. Use to A/B-test direct vs relayed transport. Restart any active session to apply.</span>
+      </label>
+    </div>
   </div>
 
   <!-- Manual-path fallback for when the OS picker is unavailable. -->
@@ -443,6 +463,20 @@ function escapeHTML(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+// Diagnostic toggle: forces ICE to relay-only on the next subprocess
+// spawn. Posts to /api/settings; on success the checkbox state is the
+// source of truth. Status poller (tick) syncs the UI back from the
+// server, so a reload restores the user's last choice.
+async function setForceRelay(checked) {
+  try {
+    await post('/api/settings', { force_relay: !!checked });
+  } catch (e) {
+    // Roll back UI — server didn't accept the change.
+    document.getElementById('force-relay').checked = !checked;
+    alert('Toggle failed: ' + e.message);
+  }
+}
+
 // Tester clipboard helper. Two key things this gets right:
 //
 //   1. Pre-fetch the log dump into a cache that refreshes in the
@@ -508,6 +542,15 @@ function copyAllLogs(btn) {
 async function tick() {
   try {
     const s = await get('/api/status');
+
+    // Sync the diagnostic toggle to the server's truth (so a reload
+    // restores last-set value). Skip if the user is mid-toggle to
+    // avoid stomping their click — we treat the change handler as
+    // the source of truth for the immediate next tick.
+    const cb = document.getElementById('force-relay');
+    if (cb && document.activeElement !== cb) {
+      cb.checked = !!s.force_relay;
+    }
 
     // Connect screen wins if a viewer is active — it is the focused mode.
     if (s.connect) {

@@ -88,9 +88,12 @@ type ShareInfo struct {
 
 // Status is the JSON returned by GET /api/status. Either Share or
 // Connect (or both) may be nil when the user isn't using that mode yet.
+// ForceRelay reflects the current diagnostic toggle so the UI checkbox
+// doesn't drift after a reload.
 type Status struct {
-	Share   *ShareInfo   `json:"share,omitempty"`
-	Connect *ConnectInfo `json:"connect,omitempty"`
+	Share      *ShareInfo   `json:"share,omitempty"`
+	Connect    *ConnectInfo `json:"connect,omitempty"`
+	ForceRelay bool         `json:"force_relay"`
 }
 
 // allLogs returns the full ring buffer (up to ~200 lines) under the
@@ -266,6 +269,13 @@ type appState struct {
 	shareDir string
 	slots    map[string]*subprocess // keyed by room
 
+	// forceRelay tells subprocesses to gather only TURN candidates.
+	// Set via the UI toggle or POST /api/settings; applied to every
+	// new subprocess spawned afterwards. Existing subprocesses keep
+	// whatever policy they were started with — toggle Stop/Start to
+	// restart the active session under the new transport.
+	forceRelay bool
+
 	log    *slog.Logger
 	binDir string
 }
@@ -289,6 +299,7 @@ func (a *appState) snapshot() Status {
 	for _, sp := range a.slots {
 		slots = append(slots, sp)
 	}
+	st.ForceRelay = a.forceRelay
 	a.mu.Unlock()
 
 	if connect != nil {
@@ -351,12 +362,18 @@ func (a *appState) addViewer() (string, error) {
 		lastStatus: "starting",
 	}
 	ownerBin := filepath.Join(a.binDir, ownerName())
-	cmd := exec.Command(ownerBin,
+	args := []string{
 		"-signal", defaultSignalURL(),
 		"-room", room,
 		"-dir", dir,
 		"-peer-alias", alias,
-	)
+	}
+	a.mu.Lock()
+	if a.forceRelay {
+		args = append(args, "-force-relay")
+	}
+	a.mu.Unlock()
+	cmd := exec.Command(ownerBin, args...)
 	if err := sp.launch(cmd); err != nil {
 		return "", err
 	}
@@ -418,12 +435,18 @@ func (a *appState) startConnect(room string) error {
 		lastStatus: "starting",
 	}
 	clientBin := filepath.Join(a.binDir, clientName())
-	cmd := exec.Command(clientBin,
+	args := []string{
 		"-signal", defaultSignalURL(),
 		"-room", room,
 		"-local", localAddr,
 		"-peer-alias", alias,
-	)
+	}
+	a.mu.Lock()
+	if a.forceRelay {
+		args = append(args, "-force-relay")
+	}
+	a.mu.Unlock()
+	cmd := exec.Command(clientBin, args...)
 	if err := sp.launch(cmd); err != nil {
 		return err
 	}
@@ -530,6 +553,35 @@ func (a *appState) httpHandlers() http.Handler {
 
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, a.snapshot())
+	})
+
+	// /api/settings — diagnostic toggles. Currently only force_relay.
+	// New value applies to the NEXT subprocess spawned, not the
+	// already-running one (we don't hot-reconfigure pion mid-session).
+	// UI tells the user to Stop+Start to re-arm under the new toggle.
+	mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			a.mu.Lock()
+			fr := a.forceRelay
+			a.mu.Unlock()
+			writeJSON(w, map[string]bool{"force_relay": fr})
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "GET or POST", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			ForceRelay bool `json:"force_relay"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		a.mu.Lock()
+		a.forceRelay = req.ForceRelay
+		a.mu.Unlock()
+		writeJSON(w, map[string]bool{"force_relay": req.ForceRelay})
 	})
 
 	// /api/logs returns a plain-text dump of every subprocess's full
@@ -920,8 +972,8 @@ func mount(localAddr, room string, sp *subprocess) error {
 		// minimal X / tiling-WM setups don't run a gvfs daemon — gio mount
 		// errors and we surface a hint to mount manually.
 		if _, err := exec.LookPath("gio"); err != nil {
-			return fmt.Errorf("gio not found; install glib-networking + gvfs-backends, " +
-				"or open http://" + localAddr + " in Files via 'Connect to Server'")
+			return fmt.Errorf("gio not found; install glib-networking + gvfs-backends, "+
+				"or open http://%s in Files via 'Connect to Server'", localAddr)
 		}
 		url := "dav://" + localAddr + "/"
 		out, err := exec.Command("gio", "mount", url).CombinedOutput()
